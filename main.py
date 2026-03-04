@@ -1,5 +1,6 @@
 from contextlib import asynccontextmanager
 from fastapi import FastAPI
+from app.core.config import settings
 
 # Placeholder for router imports
 # from app.routers import user_router, item_router
@@ -7,7 +8,7 @@ from fastapi import FastAPI
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # Setup: Initialize Database, load models, etc.
-    print("Application startup: Initializing Database...")
+    print(f"Application startup: Initializing Database at {settings.DATABASE_URL}...")
     yield
     # Teardown: Close database connections, clean up resources
     print("Application shutdown: Cleaning up...")
