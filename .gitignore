@@ -19,3 +19,7 @@ Desktop.ini
 # Linux
 *~
 .directory
+
+# Virtual environment
+.venv/
+venv/
