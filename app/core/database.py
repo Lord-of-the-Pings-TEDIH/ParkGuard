@@ -3,7 +3,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_asyn
 from app.core.config import settings
 from app.models.base import Base
 
-async_engine = create_async_engine(settings.DATABASE_URL, echo=False)
+async_engine = create_async_engine(settings.DATABASE_URL, echo=False, pool_size=5)
 
 AsyncSessionLocal = async_sessionmaker(
     bind=async_engine,
@@ -12,7 +12,7 @@ AsyncSessionLocal = async_sessionmaker(
 )
 
 
-async def create_tables() -> None:
+async def init_db() -> None:
     """Create all tables that don't yet exist."""
     async with async_engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
