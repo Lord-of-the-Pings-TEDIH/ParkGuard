@@ -7,7 +7,7 @@ from app.models.parking_lot import ParkingLot
 from app.models.camera import Camera
 from app.models.parking_spot import ParkingSpot
 from app.models.vehicle import Vehicle
-from app.models.detection import Detection
+from app.models.detection import Detection, Frame, Plate, Session
 from app.models.alert import Alert
 
 __all__ = [
@@ -18,6 +18,9 @@ __all__ = [
     "Camera",
     "ParkingSpot",
     "Vehicle",
+    "Session",
+    "Frame",
     "Detection",
+    "Plate",
     "Alert",
 ]

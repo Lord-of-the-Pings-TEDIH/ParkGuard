@@ -16,6 +16,3 @@ class Vehicle(Base):
     first_seen_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
     )
-
-    # Back-ref
-    detections: Mapped[list["Detection"]] = relationship(back_populates="vehicle")

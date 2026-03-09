@@ -20,5 +20,4 @@ class ParkingSpot(Base):
     )
 
     # Relationships
-    parking_lot: Mapped["ParkingLot"] = relationship(back_populates="spots")  
-    detections: Mapped[list["Detection"]] = relationship(back_populates="parking_spot")  
+    parking_lot: Mapped["ParkingLot"] = relationship(back_populates="spots")
