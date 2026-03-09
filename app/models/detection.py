@@ -1,32 +1,150 @@
+"""Detection-pipeline ORM models: Session, Frame, Detection, Plate."""
+
+import uuid
 from datetime import datetime
 
-from sqlalchemy import Float, String, ForeignKey, DateTime, func
+from sqlalchemy import (
+    Boolean,
+    DateTime,
+    Float,
+    ForeignKey,
+    Integer,
+    String,
+    Text,
+    func,
+)
+from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.models.base import Base
 
 
+class Session(Base):
+    """A single video-processing session (one source file / stream)."""
+
+    __tablename__ = "sessions"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    source_filename: Mapped[str] = mapped_column(String(500), nullable=False)
+    status: Mapped[str] = mapped_column(
+        String(30), nullable=False, default="pending"
+    )
+    fps_target: Mapped[float | None] = mapped_column(Float, nullable=True)
+    frames_processed: Mapped[int] = mapped_column(Integer, default=0)
+    error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+    ended_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+
+    # Relationships
+    frames: Mapped[list["Frame"]] = relationship(
+        back_populates="session", cascade="all, delete-orphan"
+    )
+
+
+class Frame(Base):
+    """A single frame extracted from a session's video source."""
+
+    __tablename__ = "frames"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    session_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("sessions.id"), nullable=False
+    )
+    frame_index: Mapped[int] = mapped_column(Integer, nullable=False)
+    pts_ms: Mapped[float | None] = mapped_column(Float, nullable=True)
+
+    # Relationships
+    session: Mapped["Session"] = relationship(back_populates="frames")
+    detections: Mapped[list["Detection"]] = relationship(
+        back_populates="frame", cascade="all, delete-orphan"
+    )
+
+
 class Detection(Base):
+    """A single licence-plate detection within a frame."""
+
     __tablename__ = "detections"
 
-    id: Mapped[int] = mapped_column(primary_key=True)
-    camera_id: Mapped[int] = mapped_column(
-        ForeignKey("cameras.id"), nullable=False
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
     )
-    parking_spot_id: Mapped[int | None] = mapped_column(
-        ForeignKey("parking_spots.id"), nullable=True
+    frame_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("frames.id"), nullable=False
     )
-    vehicle_id: Mapped[int | None] = mapped_column(
-        ForeignKey("vehicles.id"), nullable=True
+
+    # Bounding box
+    bbox_x: Mapped[float] = mapped_column(Float, nullable=False)
+    bbox_y: Mapped[float] = mapped_column(Float, nullable=False)
+    bbox_w: Mapped[float] = mapped_column(Float, nullable=False)
+    bbox_h: Mapped[float] = mapped_column(Float, nullable=False)
+
+    detection_confidence: Mapped[float] = mapped_column(Float, nullable=False)
+
+    # OCR results
+    ocr_raw_text: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    ocr_normalized_text: Mapped[str | None] = mapped_column(
+        String(50), nullable=True
     )
-    confidence: Mapped[float] = mapped_column(Float, nullable=False)
-    image_path: Mapped[str | None] = mapped_column(String(500))
-    detected_at: Mapped[datetime] = mapped_column(
+    is_valid_ro_plate: Mapped[bool] = mapped_column(
+        Boolean, default=False
+    )
+
+    crop_image_path: Mapped[str | None] = mapped_column(
+        String(500), nullable=True
+    )
+
+    # Ticketing
+    ticket_status: Mapped[str | None] = mapped_column(
+        String(30), nullable=True
+    )
+    ticket_expires_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+
+    created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
     )
 
     # Relationships
-    camera: Mapped["Camera"] = relationship(back_populates="detections")  
-    parking_spot: Mapped["ParkingSpot | None"] = relationship(back_populates="detections")  
-    vehicle: Mapped["Vehicle | None"] = relationship(back_populates="detections")  
-    alerts: Mapped[list["Alert"]] = relationship(back_populates="detection")  
+    frame: Mapped["Frame"] = relationship(back_populates="detections")
+    plate: Mapped["Plate | None"] = relationship(back_populates="detections")
+
+    # FK to plates (by normalized text)
+    plate_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("plates.id"), nullable=True
+    )
+
+
+class Plate(Base):
+    """A unique Romanian licence plate observed across sessions."""
+
+    __tablename__ = "plates"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    normalized_text: Mapped[str] = mapped_column(
+        String(20), unique=True, nullable=False
+    )
+    county_code: Mapped[str | None] = mapped_column(String(5), nullable=True)
+    county_name: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    plate_type: Mapped[str | None] = mapped_column(String(30), nullable=True)
+
+    first_seen_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+    last_seen_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+    seen_count: Mapped[int] = mapped_column(Integer, default=1)
+
+    # Relationships
+    detections: Mapped[list["Detection"]] = relationship(back_populates="plate")
