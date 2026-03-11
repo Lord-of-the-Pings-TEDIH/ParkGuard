@@ -9,6 +9,12 @@ from app.models.parking_spot import ParkingSpot
 from app.models.vehicle import Vehicle
 from app.models.detection import Detection, Frame, Plate, Session
 from app.models.alert import Alert
+from app.models.parking import (
+    ParkingZone,
+    ParkingTicket,
+    ParkingSubscription,
+    TicketCheck,
+)
 
 __all__ = [
     "Base",
@@ -23,4 +29,8 @@ __all__ = [
     "Detection",
     "Plate",
     "Alert",
+    "ParkingZone",
+    "ParkingTicket",
+    "ParkingSubscription",
+    "TicketCheck",
 ]
