@@ -1,5 +1,9 @@
 from contextlib import asynccontextmanager
+from pathlib import Path
+
 from fastapi import FastAPI
+from fastapi.staticfiles import StaticFiles
+
 from app.core.config import settings
 from app.core.database import init_db
 
@@ -8,6 +12,10 @@ import app.models
 
 # Placeholder for router imports
 # from app.routers import user_router, item_router
+
+# Create required directories before mounting static files
+Path(settings.CROPS_DIR).mkdir(parents=True, exist_ok=True)
+Path(settings.UPLOAD_DIR).mkdir(parents=True, exist_ok=True)
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -22,6 +30,7 @@ async def lifespan(app: FastAPI):
     print("Application shutdown: database connections closed.")
 
 app = FastAPI(lifespan=lifespan, title="ParkGuard API")
+app.mount("/crops", StaticFiles(directory=settings.CROPS_DIR), name="crops")
 
 @app.get("/")
 async def root():
