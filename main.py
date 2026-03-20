@@ -15,9 +15,8 @@ from app.core.database import init_db
 import app.models
 
 from app.routers.sessions import router as sessions_router
-
-# Placeholder for router imports
-# from app.routers import user_router, item_router
+from app.routers.plates import router as plates_router
+from app.routers.parking import router as parking_router
 
 # Create required directories before mounting static files
 Path(settings.CROPS_DIR).mkdir(parents=True, exist_ok=True)
@@ -59,7 +58,9 @@ async def validation_exception_handler(request, exc):
     return JSONResponse({"detail": detail}, status_code=422)
 
 app.mount("/crops", StaticFiles(directory=settings.CROPS_DIR), name="crops")
-app.include_router(sessions_router)
+app.include_router(sessions_router, prefix="/sessions", tags=["sessions"])
+app.include_router(plates_router, prefix="/plates", tags=["plates"])
+app.include_router(parking_router, prefix="/parking", tags=["parking"])
 
 
 class HealthCheckOut(BaseModel):

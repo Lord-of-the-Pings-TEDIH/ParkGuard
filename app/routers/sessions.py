@@ -15,7 +15,15 @@ from app.schemas.detection import DetectionOut, SessionOut
 router = APIRouter()
 
 
-@router.post("/sessions", response_model=SessionOut)
+@router.get("", response_model=List[SessionOut])
+async def list_sessions(db: AsyncSession = Depends(get_db)):
+    """Return all sessions."""
+    result = await db.execute(select(Session))
+    sessions = result.scalars().all()
+    return sessions
+
+
+@router.post("", response_model=SessionOut, status_code=201)
 async def create_session(file: UploadFile, db: AsyncSession = Depends(get_db)):
     session_id = uuid.uuid4()
     filename = file.filename or "unknown_file"
@@ -38,7 +46,7 @@ async def create_session(file: UploadFile, db: AsyncSession = Depends(get_db)):
     return new_session
 
 
-@router.get("/sessions/{session_id}/detections", response_model=List[DetectionOut])
+@router.get("/{session_id}/detections", response_model=List[DetectionOut])
 async def list_detections(session_id: uuid.UUID, db: AsyncSession = Depends(get_db)):
     """Return all detections for a session, with a computed crop_image_url."""
     # Verify session exists
