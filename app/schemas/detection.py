@@ -1,7 +1,8 @@
+import os
 import uuid
 from datetime import datetime
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, computed_field
 
 
 class PlateOut(BaseModel):
@@ -40,6 +41,21 @@ class DetectionOut(BaseModel):
     plate_id: uuid.UUID | None = None
 
     model_config = ConfigDict(from_attributes=True)
+
+    @computed_field  # type: ignore[prop-decorator]
+    @property
+    def crop_image_url(self) -> str | None:
+        """Return a fully-rooted URL for the crop image (e.g. /crops/abc.jpg).
+
+        Handles three possible storage formats for crop_image_path:
+          - None            → None
+          - "abc.jpg"       → "/crops/abc.jpg"
+          - "crops/abc.jpg" → "/crops/abc.jpg"
+        """
+        if self.crop_image_path is None:
+            return None
+        filename = os.path.basename(self.crop_image_path)
+        return f"/crops/{filename}"
 
 
 class SessionOut(BaseModel):
