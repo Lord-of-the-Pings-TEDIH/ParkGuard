@@ -45,7 +45,7 @@ class ParkingTicket(Base):
     id: Mapped[int] = mapped_column(primary_key=True)
     plate_text: Mapped[str] = mapped_column(String(20), nullable=False, index=True)
     zone_id: Mapped[int | None] = mapped_column(
-        ForeignKey("parking_zones.id"), nullable=True
+        ForeignKey("parking_zones.id"), nullable=True, index=True
     )
     valid_from: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False
@@ -74,7 +74,7 @@ class ParkingSubscription(Base):
     id: Mapped[int] = mapped_column(primary_key=True)
     plate_text: Mapped[str] = mapped_column(String(20), nullable=False, index=True)
     zone_id: Mapped[int | None] = mapped_column(
-        ForeignKey("parking_zones.id"), nullable=True
+        ForeignKey("parking_zones.id"), nullable=True, index=True
     )
     subscription_type: Mapped[str] = mapped_column(String(50), nullable=False)
     start_date: Mapped[date] = mapped_column(Date, nullable=False)
@@ -103,7 +103,7 @@ class TicketCheck(Base):
         BigInteger, primary_key=True, autoincrement=True
     )
     detection_id: Mapped[int] = mapped_column(
-        ForeignKey("detections.id"), nullable=False
+        ForeignKey("detections.id"), nullable=False, index=True
     )
     plate_text: Mapped[str] = mapped_column(String(20), nullable=False, index=True)
     checked_at: Mapped[datetime] = mapped_column(
@@ -111,10 +111,10 @@ class TicketCheck(Base):
     )
     result_status: Mapped[str] = mapped_column(String(30), nullable=False)
     matched_ticket_id: Mapped[int | None] = mapped_column(
-        ForeignKey("parking_tickets.id"), nullable=True
+        ForeignKey("parking_tickets.id"), nullable=True, index=True
     )
     matched_sub_id: Mapped[int | None] = mapped_column(
-        ForeignKey("parking_subscriptions.id"), nullable=True
+        ForeignKey("parking_subscriptions.id"), nullable=True, index=True
     )
     expires_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True

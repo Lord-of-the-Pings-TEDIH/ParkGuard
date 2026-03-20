@@ -56,7 +56,7 @@ class Frame(Base):
         UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
     )
     session_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("sessions.id"), nullable=False
+        UUID(as_uuid=True), ForeignKey("sessions.id"), nullable=False, index=True
     )
     frame_index: Mapped[int] = mapped_column(Integer, nullable=False)
     pts_ms: Mapped[float | None] = mapped_column(Float, nullable=True)
@@ -77,7 +77,7 @@ class Detection(Base):
         UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
     )
     frame_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("frames.id"), nullable=False
+        UUID(as_uuid=True), ForeignKey("frames.id"), nullable=False, index=True
     )
 
     # Bounding box
@@ -119,7 +119,7 @@ class Detection(Base):
 
     # FK to plates (by normalized text)
     plate_id: Mapped[uuid.UUID | None] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("plates.id"), nullable=True
+        UUID(as_uuid=True), ForeignKey("plates.id"), nullable=True, index=True
     )
 
 
