@@ -29,6 +29,13 @@ async def lifespan(app: FastAPI):
         print(f"Application startup: connecting to {settings.DATABASE_URL} ...")
         await init_db()
         print("Database tables created successfully.")
+        
+        # Seed test data if needed
+        from app.core.database import AsyncSessionLocal
+        from app.core.seed import seed_db
+        async with AsyncSessionLocal() as session:
+            await seed_db(session)
+            
     except Exception as e:
         print(f"Warning: Database initialization failed: {e}")
     yield
