@@ -10,36 +10,7 @@
 -- 9. CT33NOP (sub active)
 -- 10. PH44QRS (sub active)
 
--- Drop existing tables to align with test data requirements
-DROP TABLE IF EXISTS parking_subscriptions CASCADE;
-DROP TABLE IF EXISTS parking_tickets CASCADE;
-DROP TABLE IF EXISTS parking_zones CASCADE;
-
--- Recreate parking_zones
-CREATE TABLE parking_zones (
-    id UUID PRIMARY KEY,
-    name VARCHAR(255),
-    code VARCHAR(50),
-    grace_period_min INT
-);
-
--- Recreate parking_tickets
-CREATE TABLE parking_tickets (
-    id SERIAL PRIMARY KEY,
-    zone_id UUID REFERENCES parking_zones(id),
-    plate_text VARCHAR(50),
-    valid_from TIMESTAMP,
-    valid_until TIMESTAMP
-);
-
--- Recreate parking_subscriptions
-CREATE TABLE parking_subscriptions (
-    id SERIAL PRIMARY KEY,
-    zone_id UUID REFERENCES parking_zones(id),
-    plate_text VARCHAR(50),
-    type VARCHAR(50),
-    end_date TIMESTAMP
-);
+-- NOTE: Ensure your backend framework (like Uvicorn's lifespan create_all) has run and created the tables before executing these assertions!
 
 -- Insert parking zone
 INSERT INTO parking_zones (id, name, code, grace_period_min) VALUES 
