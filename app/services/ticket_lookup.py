@@ -5,7 +5,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 UTC = timezone.utc
 
-from app.models.parking import ParkingTicket, ParkingSubscription, ParkingZone
+from app.models.parking import ParkingTicket, ParkingSubscription, ParkingZone, TicketCheck
 from app.models.detection import Plate
 
 
@@ -129,6 +129,7 @@ async def lookup_ticket(
     zone_id: int | None,
     checked_at: datetime,
     db: AsyncSession,
+    detection_id: int | None = None,
 ) -> tuple[str, datetime | None, int | None, int | None]:
     """Check whether *plate_text* has valid parking at *checked_at*.
 
@@ -141,30 +142,59 @@ async def lookup_ticket(
     'grace'        – ticket recently expired, still within grace window
     'none'         – plate is known but has no valid coverage
     'unknown'      – plate not found in the vehicles table at all
+
+    A ``TicketCheck`` audit row is persisted whenever *detection_id* is
+    provided (i.e. in production).  The parameter is optional so that
+    unit tests that don't have a real ``detections`` row can still call
+    this function without FK violations.
     """
     # Step 1 – active ticket
+    ticket_id: int | None = None
+    sub_id: int | None = None
+    expires_at: datetime | None = None
+    status: str
+
     ticket_match = await check_active_ticket(plate_text, zone_id, checked_at, db)
     if ticket_match is not None:
         ticket_id, expires_at = ticket_match
-        return ("active", expires_at, ticket_id, None)
+        status = "active"
+    else:
+        # Step 2 – active subscription
+        sub_match = await _check_active_subscription(plate_text, zone_id, checked_at, db)
+        if sub_match is not None:
+            sub_id, expires_at = sub_match
+            status = "subscription"
+        else:
+            # Step 3 – grace period
+            grace_match = await _check_grace_period(plate_text, zone_id, checked_at, db)
+            if grace_match is not None:
+                ticket_id, expires_at = grace_match
+                status = "grace"
+            else:
+                # No coverage – distinguish known vs unknown plate
+                plate_exists = await db.execute(
+                    select(Plate.id).where(Plate.normalized_text == plate_text).limit(1)
+                )
+                if plate_exists.scalar_one_or_none() is not None:
+                    status = "none"
+                else:
+                    status = "unknown"
 
-    # Step 2 – active subscription
-    sub_match = await _check_active_subscription(plate_text, zone_id, checked_at, db)
-    if sub_match is not None:
-        sub_id, expires_at = sub_match
-        return ("subscription", expires_at, None, sub_id)
+    # --- Audit row ---------------------------------------------------
+    if detection_id is not None:
+        audit = TicketCheck(
+            detection_id=detection_id,
+            plate_text=plate_text,
+            checked_at=checked_at,
+            result_status=status,
+            matched_ticket_id=ticket_id,
+            matched_sub_id=sub_id,
+            expires_at=expires_at,
+        )
+        db.add(audit)
+        # Flush so the row is visible within the same transaction;
+        # the caller is responsible for commit.
+        await db.flush()
+    # -----------------------------------------------------------------
 
-    # Step 3 – grace period
-    grace_match = await _check_grace_period(plate_text, zone_id, checked_at, db)
-    if grace_match is not None:
-        ticket_id, expires_at = grace_match
-        return ("grace", expires_at, ticket_id, None)
-
-    # No coverage – distinguish known vs unknown plate
-    plate_exists = await db.execute(
-        select(Plate.id).where(Plate.normalized_text == plate_text).limit(1)
-    )
-    if plate_exists.scalar_one_or_none() is not None:
-        return ("none", None, None, None)
-
-    return ("unknown", None, None, None)
+    return (status, expires_at, ticket_id, sub_id)
