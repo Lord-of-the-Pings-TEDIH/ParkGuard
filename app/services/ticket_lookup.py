@@ -121,6 +121,39 @@ async def _check_grace_period(
 
 
 # ---------------------------------------------------------------------------
+# Audit helper
+# ---------------------------------------------------------------------------
+
+async def write_ticket_check(
+    detection_id: int,
+    plate_text: str,
+    checked_at: datetime,
+    status: str,
+    matched_ticket_id: int | None,
+    matched_sub_id: int | None,
+    expires_at: datetime | None,
+    db: AsyncSession,
+) -> None:
+    """Persist a ``TicketCheck`` audit row for *detection_id*.
+
+    Adds the ORM object to *db* and flushes so it is visible within the
+    current transaction.  Does **not** commit — the caller is responsible
+    for committing together with the detection row.
+    """
+    audit = TicketCheck(
+        detection_id=detection_id,
+        plate_text=plate_text,
+        checked_at=checked_at,
+        result_status=status,
+        matched_ticket_id=matched_ticket_id,
+        matched_sub_id=matched_sub_id,
+        expires_at=expires_at,
+    )
+    db.add(audit)
+    await db.flush()
+
+
+# ---------------------------------------------------------------------------
 # Public orchestrator
 # ---------------------------------------------------------------------------
 
@@ -182,19 +215,16 @@ async def lookup_ticket(
 
     # --- Audit row ---------------------------------------------------
     if detection_id is not None:
-        audit = TicketCheck(
+        await write_ticket_check(
             detection_id=detection_id,
             plate_text=plate_text,
             checked_at=checked_at,
-            result_status=status,
+            status=status,
             matched_ticket_id=ticket_id,
             matched_sub_id=sub_id,
             expires_at=expires_at,
+            db=db,
         )
-        db.add(audit)
-        # Flush so the row is visible within the same transaction;
-        # the caller is responsible for commit.
-        await db.flush()
     # -----------------------------------------------------------------
 
     return (status, expires_at, ticket_id, sub_id)
