@@ -6,3 +6,5 @@ aiofiles==25.*
 python-multipart>=0.0.22
 pydantic-settings==2.3.*
 python-dotenv==1.0.*
+opencv-python-headless==4.9.*
+numpy<2
