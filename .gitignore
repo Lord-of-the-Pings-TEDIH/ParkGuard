@@ -30,3 +30,4 @@ venv/
 # Python cache
 __pycache__/
 *.pyc
+test_output/
