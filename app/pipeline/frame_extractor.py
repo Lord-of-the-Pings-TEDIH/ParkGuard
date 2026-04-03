@@ -48,7 +48,7 @@ def extract_frames(
 
     try:
         video_fps: float = cap.get(cv2.CAP_PROP_FPS) or 25.0  # default to 25 if unset
-        frame_interval: int = max(1, int(video_fps / fps_target))
+        frame_interval: int = max(1, round(video_fps / fps_target))
 
         frame_index: int = 0
         while True:
