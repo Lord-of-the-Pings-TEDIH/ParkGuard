@@ -10,6 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.config import settings
 from app.core.database import get_db
 from app.models.detection import Detection, Frame, Session
+from app.pipeline.processor import process_session
 from app.schemas.detection import DetectionOut, SessionOut
 
 router = APIRouter()
@@ -44,6 +45,20 @@ async def create_session(file: UploadFile, db: AsyncSession = Depends(get_db)):
     await db.refresh(new_session)
 
     return new_session
+
+
+@router.post("/{session_id}/process", response_model=SessionOut)
+async def process_session_endpoint(
+    session_id: uuid.UUID, db: AsyncSession = Depends(get_db)
+):
+    """Run the ML pipeline on an uploaded session's video."""
+    session = await db.get(Session, session_id)
+    if session is None:
+        raise HTTPException(status_code=404, detail="Session not found")
+
+    await process_session(session_id, db)
+    await db.refresh(session)
+    return session
 
 
 @router.get("/{session_id}/detections", response_model=List[DetectionOut])
