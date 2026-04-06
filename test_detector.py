@@ -28,7 +28,7 @@ from app.pipeline.detector import PlateDetector
 
 # ── configuration ────────────────────────────────────────────────
 OUTPUT_DIR = os.path.join(os.path.dirname(__file__), "test_output")
-SAMPLE_URL = "https://ultralytics.com/images/bus.jpg"
+SAMPLE_URL = "https://www.olavsplates.com/foto_r/ro_b208gab.jpg"
 SAMPLE_PATH = os.path.join(OUTPUT_DIR, "sample_input.jpg")
 
 
