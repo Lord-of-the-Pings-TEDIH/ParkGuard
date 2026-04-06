@@ -71,3 +71,32 @@ def test_get_video_info(test_video):
     assert info['width'] == 100
     assert info['height'] == 100
     assert info['duration_s'] == 2.0
+
+
+def test_real_video_extraction():
+    video_path = "tests/fixtures/real_test_video.mp4"
+    gen = extract_frames(video_path, fps_target=5)
+    
+    # Get the first frame to initialize the generator and open the cap
+    first_yield = next(gen)
+    
+    # Introspect local variables to get the 'cap' object
+    cap = gen.gi_frame.f_locals['cap']
+    
+    # Consume the rest of the frames
+    frames = [first_yield] + list(gen)
+    
+    # 1. Test that fps_target=5 yields ~50 frames from a 10s video (±2 tolerance)
+    assert 48 <= len(frames) <= 52, f"Expected ~50 frames, got {len(frames)}"
+    
+    # 2. Test that pts_ms increases monotonically
+    pts_list = [f[1] for f in frames]
+    assert all(pts_list[i] < pts_list[i+1] for i in range(len(pts_list)-1))
+    
+    # 3. Test that frame.shape[2] == 3 (BGR)
+    for _, _, frame in frames:
+        assert frame.shape[2] == 3
+        
+    # 4. Test that VideoCapture is closed after iteration
+    assert cap.isOpened() == False
+
