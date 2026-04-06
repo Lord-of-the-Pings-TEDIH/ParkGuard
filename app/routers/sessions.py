@@ -11,6 +11,7 @@ from app.core.config import settings
 from app.core.database import get_db
 from app.models.detection import Detection, Frame, Session
 from app.schemas.detection import DetectionOut, SessionOut
+from app.pipeline.frame_extractor import get_video_info
 
 router = APIRouter()
 
@@ -33,11 +34,19 @@ async def create_session(file: UploadFile, db: AsyncSession = Depends(get_db)):
         content = await file.read()
         await out.write(content)
 
+    total_frames = None
+    try:
+        video_info = get_video_info(str(dest))
+        total_frames = video_info.get("total_frames")
+    except Exception:
+        pass
+
     new_session = Session(
         id=session_id,
         source_filename=filename,
         status="pending",
         frames_processed=0,
+        total_frames=total_frames,
     )
     db.add(new_session)
     await db.commit()

@@ -64,6 +64,7 @@ class SessionOut(BaseModel):
     status: str
     fps_target: float | None = None
     frames_processed: int
+    total_frames: int | None = None
     error_message: str | None = None
     created_at: datetime
     ended_at: datetime | None = None
