@@ -36,6 +36,10 @@ class PlateDetector:
     def __init__(self, model_path: str, conf_threshold: float) -> None:
         self.model = YOLO(model_path)
         self.conf_threshold = conf_threshold
+        # Initialize Haar Cascade for license plates
+        self.plate_cascade = cv2.CascadeClassifier(
+            cv2.data.haarcascades + "haarcascade_russian_plate_number.xml"
+        )
 
     def detect(self, frame: np.ndarray, frame_index: int = 0) -> list[dict]:
         """Run inference on a single BGR frame.
@@ -70,14 +74,41 @@ class PlateDetector:
             )
             return detections
 
+        # Convert the frame to grayscale for Haar Cascade
+        gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+
         for box in boxes:
+            # Only process vehicle classes: 2 (car), 3 (motorcycle), 5 (bus), 7 (truck)
+            cls_id = int(box.cls[0])
+            if cls_id not in (2, 3, 5, 7):
+                continue
+
             x1, y1, x2, y2 = box.xyxy[0].tolist()
             x, y, w, h = int(x1), int(y1), int(x2 - x1), int(y2 - y1)
             confidence = float(box.conf[0])
-            detections.append({
-                "bbox": (x, y, w, h),
-                "confidence": confidence,
-            })
+
+            # Ensure coordinates are within frame bounds
+            frame_h, frame_w = frame.shape[:2]
+            y_start, y_end = max(0, y), min(frame_h, y + h)
+            x_start, x_end = max(0, x), min(frame_w, x + w)
+
+            roi_gray = gray[y_start:y_end, x_start:x_end]
+            if roi_gray.size == 0:
+                continue
+
+            # Detect plates within the vehicle ROI
+            plates = self.plate_cascade.detectMultiScale(
+                roi_gray,
+                scaleFactor=1.05,
+                minNeighbors=1,
+                minSize=(15, 15)
+            )
+
+            for (px, py, pw, ph) in plates:
+                detections.append({
+                    "bbox": (int(x_start + px), int(y_start + py), int(pw), int(ph)),
+                    "confidence": confidence,  # Inherit vehicle confidence
+                })
 
         logger.debug(
             "Frame %d: YOLO inference %.1fms, %d detections",
