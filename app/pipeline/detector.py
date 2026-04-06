@@ -63,3 +63,43 @@ class PlateDetector:
             })
 
         return detections
+
+    @staticmethod
+    def crop_plate(
+        frame: np.ndarray, bbox: tuple, padding: int = 4
+    ) -> np.ndarray:
+        """Extract the plate region from *frame* with optional padding.
+
+        Parameters
+        ----------
+        frame:
+            BGR image array with shape ``(H, W, 3)``.
+        bbox:
+            ``(x, y, w, h)`` integers (top-left corner + size).
+        padding:
+            Extra pixels to include around the bounding box.
+
+        Returns
+        -------
+        np.ndarray
+            Cropped BGR image.
+
+        Raises
+        ------
+        ValueError
+            If the resulting crop is empty (zero-area).
+        """
+        x, y, w, h = bbox
+        img_h, img_w = frame.shape[:2]
+
+        x1 = max(x - padding, 0)
+        y1 = max(y - padding, 0)
+        x2 = min(x + w + padding, img_w)
+        y2 = min(y + h + padding, img_h)
+
+        crop = frame[y1:y2, x1:x2]
+
+        if crop.size == 0:
+            raise ValueError("Empty crop")
+
+        return crop
