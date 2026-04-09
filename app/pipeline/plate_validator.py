@@ -52,11 +52,11 @@ COUNTY_CODES: Final[frozenset[str]] = frozenset(
     }
 )
 STANDARD_RE: Final[re.Pattern[str]] = re.compile(
-    r"^(B\d{3}[A-Z]{3}|[A-Z]{2}\d{2}[A-Z]{3})$"
+    r"^(B\d{2,3}[A-Z]{3}|[A-Z]{2}\d{2}[A-Z]{3})$"
 )
 
 _NON_ALNUM_RE: Final[re.Pattern[str]] = re.compile(r"[^A-Z0-9]")
-_BUCHAREST_RE: Final[re.Pattern[str]] = re.compile(r"^B\d{3}[A-Z]{3}$")
+_BUCHAREST_RE: Final[re.Pattern[str]] = re.compile(r"^B\d{2,3}[A-Z]{3}$")
 _B_PREFIX_DIGIT_HINTS: Final[frozenset[str]] = frozenset("0123456789OISB")
 _COUNTY_CODE_CORRECTIONS: Final[dict[str, str]] = {"0": "O", "1": "I", "8": "B"}
 _DIGIT_CORRECTIONS: Final[dict[str, str]] = {"O": "0", "I": "1", "S": "5", "B": "8"}
@@ -69,6 +69,28 @@ def _replace_positions(
     for idx in positions:
         if idx < len(chars):
             chars[idx] = replacements.get(chars[idx], chars[idx])
+
+
+def _county_char_candidates(char: str) -> tuple[str, ...]:
+    if char == "0":
+        return ("O", "C")
+    corrected = _COUNTY_CODE_CORRECTIONS.get(char, char)
+    return (corrected,)
+
+
+def _correct_county_code(county_code: str) -> str:
+    if len(county_code) != 2:
+        return county_code
+
+    first_candidates = _county_char_candidates(county_code[0])
+    second_candidates = _county_char_candidates(county_code[1])
+    for first_char in first_candidates:
+        for second_char in second_candidates:
+            candidate = f"{first_char}{second_char}"
+            if candidate in COUNTY_CODES:
+                return candidate
+
+    return "".join(_COUNTY_CODE_CORRECTIONS.get(char, char) for char in county_code)
 
 
 def _apply_ocr_corrections(text: str) -> str:
@@ -86,7 +108,8 @@ def _apply_ocr_corrections(text: str) -> str:
         _replace_positions(chars, (0,), _COUNTY_CODE_CORRECTIONS)
         _replace_positions(chars, (1, 2, 3), _DIGIT_CORRECTIONS)
     elif is_standard_shape:
-        _replace_positions(chars, (0, 1), _COUNTY_CODE_CORRECTIONS)
+        corrected_county = _correct_county_code("".join(chars[:2]))
+        chars[0], chars[1] = corrected_county[0], corrected_county[1]
         _replace_positions(chars, (2, 3), _DIGIT_CORRECTIONS)
     else:
         return text
