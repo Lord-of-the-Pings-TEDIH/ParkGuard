@@ -21,11 +21,14 @@ FIXTURES = Path(__file__).parent / "fixtures"
 # Helpers to build fake YOLO result objects
 # ---------------------------------------------------------------------------
 
-def _make_box(x1: float, y1: float, x2: float, y2: float, conf: float):
+def _make_box(
+    x1: float, y1: float, x2: float, y2: float, conf: float, cls: int = 2
+):
     """Return a mock object that behaves like a single ultralytics Box."""
     box = MagicMock()
     box.xyxy = [np.array([x1, y1, x2, y2])]
     box.conf = [conf]
+    box.cls = [cls]
     return box
 
 
@@ -51,6 +54,8 @@ def detector():
         det = PlateDetector(model_path="fake.pt", conf_threshold=0.50)
         # Expose the mock so tests can configure return values
         det._mock_model = mock_model
+        det.plate_cascade = MagicMock()
+        det.plate_cascade.detectMultiScale.return_value = [(20, 10, 120, 40)]
         yield det
 
 
