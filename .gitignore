@@ -33,3 +33,4 @@ __pycache__/
 test_output/
 tests/fixtures
 /debug_output.jpg
+/.github/
