@@ -58,6 +58,18 @@ def test_normalize_plate_applies_position_based_ocr_corrections() -> None:
     assert normalize_plate("ab1oab0") == ("AB10ABO", True)
 
 
+def test_normalize_plate_applies_full_standard_ocr_correction_map() -> None:
+    assert normalize_plate("08OI158") == ("OB01ISB", False)
+
+
+def test_normalize_plate_applies_b_prefix_digit_corrections() -> None:
+    assert normalize_plate("B1S8AB0") == ("B158ABO", True)
+
+
+def test_normalize_plate_handles_b_prefix_with_8_as_county_hint() -> None:
+    assert normalize_plate("8123AB0") == ("B123ABO", True)
+
+
 def test_normalize_plate_keeps_invalid_payload_and_marks_it_invalid() -> None:
     assert normalize_plate("GARBAGE") == ("GARBAGE", False)
 
