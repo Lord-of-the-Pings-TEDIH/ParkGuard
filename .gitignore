@@ -32,3 +32,4 @@ __pycache__/
 *.pyc
 test_output/
 tests/fixtures
+/debug_output.jpg
