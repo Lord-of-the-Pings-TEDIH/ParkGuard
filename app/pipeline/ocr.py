@@ -1,10 +1,16 @@
 """OCR image preprocessing utilities."""
+# Baseline: 15.1ms/crop CPU
 
 from __future__ import annotations
+
+import logging
+import time
 
 import cv2
 import easyocr
 import numpy as np
+
+logger = logging.getLogger(__name__)
 
 
 def preprocess_crop(crop: np.ndarray) -> np.ndarray:
@@ -36,14 +42,24 @@ class PlateReader:
         self.reader = easyocr.Reader(["ro", "en"], gpu=gpu)
 
     def read_plate(self, crop: np.ndarray) -> tuple[str, float]:
+        started_at = time.perf_counter()
         processed = preprocess_crop(crop)
         results = self.reader.readtext(processed, detail=1, paragraph=False)
 
         if not results:
-            return "", 0.0
+            raw_text = ""
+            confidence = 0.0
+        else:
+            raw_text = "".join(
+                r[1] for r in sorted(results, key=lambda r: r[0][0][0])
+            )
+            confidence = float(sum(r[2] for r in results) / len(results))
 
-        raw_text = "".join(
-            r[1] for r in sorted(results, key=lambda r: r[0][0][0])
+        elapsed_ms = (time.perf_counter() - started_at) * 1000
+        logger.debug(
+            'OCR: raw="%s" conf=%.2f time=%.1fms',
+            raw_text,
+            confidence,
+            elapsed_ms,
         )
-        confidence = float(sum(r[2] for r in results) / len(results))
         return raw_text, confidence
