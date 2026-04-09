@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pytest
 
-from app.pipeline.plate_normalization import normalize_plate
+from app.pipeline.plate_validator import normalize_plate
 
 COUNTY_CODES = (
     "AB",
@@ -51,11 +51,11 @@ COUNTY_CODES = (
 
 
 def test_normalize_plate_strips_spacing_and_uppercases() -> None:
-    assert normalize_plate("B 12 abc") == ("B12ABC", True)
+    assert normalize_plate("B 123 abc") == ("B123ABC", True)
 
 
-def test_normalize_plate_applies_ocr_zero_to_c_correction() -> None:
-    assert normalize_plate("0J05XYZ") == ("CJ05XYZ", True)
+def test_normalize_plate_applies_position_based_ocr_corrections() -> None:
+    assert normalize_plate("ab1oab0") == ("AB10ABO", True)
 
 
 def test_normalize_plate_keeps_invalid_payload_and_marks_it_invalid() -> None:
@@ -72,5 +72,5 @@ def test_county_fixture_has_42_codes() -> None:
 
 @pytest.mark.parametrize("county_code", COUNTY_CODES)
 def test_all_romanian_county_codes_are_accepted(county_code: str) -> None:
-    plate = "B12ABC" if county_code == "B" else f"{county_code}12ABC"
+    plate = "B123ABC" if county_code == "B" else f"{county_code}12ABC"
     assert normalize_plate(plate) == (plate, True)
