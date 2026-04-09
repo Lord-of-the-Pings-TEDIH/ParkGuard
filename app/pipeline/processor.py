@@ -22,6 +22,7 @@ from app.core.config import settings
 from app.models.detection import Detection, Frame, Plate, Session
 from app.pipeline.detector import PlateDetector
 from app.pipeline.frame_extractor import extract_frames
+from app.pipeline.plate_normalization import normalize_plate
 from app.services.ticket_lookup import lookup_ticket
 
 logger = logging.getLogger(__name__)
@@ -72,7 +73,7 @@ async def process_session(
 
     Steps for each frame:
     1. Run YOLO detector to find licence-plate bounding boxes.
-    2. Crop each detection and (optionally) run OCR.
+    2. Crop each detection, run OCR, and normalize plate text.
     3. Persist ``Frame``, ``Detection`` and ``Plate`` rows.
     4. Call ``lookup_ticket`` with the ``detection_id`` so a
        ``TicketCheck`` audit row is written.
@@ -130,8 +131,14 @@ async def process_session(
             crop_path = Path(settings.CROPS_DIR) / crop_filename
             cv2.imwrite(str(crop_path), crop)
 
-            # OCR
-            plate_text = recognize(crop)
+            # OCR + Romanian-format normalization
+            raw_plate_text = recognize(crop)
+            normalized_plate_text: str | None = None
+            is_valid_ro_plate = False
+            if raw_plate_text:
+                normalized_plate_text, is_valid_ro_plate = normalize_plate(
+                    raw_plate_text
+                )
 
             detection = Detection(
                 frame_id=frame.id,
@@ -141,19 +148,20 @@ async def process_session(
                 bbox_h=bbox_h,
                 detection_confidence=confidence,
                 crop_image_path=crop_filename,
-                ocr_raw_text=plate_text,
-                ocr_normalized_text=plate_text,
+                ocr_raw_text=raw_plate_text,
+                ocr_normalized_text=normalized_plate_text,
+                is_valid_ro_plate=is_valid_ro_plate,
             )
             db.add(detection)
             await db.flush()
 
             # Plate + ticket lookup (writes TicketCheck audit row)
-            if plate_text:
-                plate = await _get_or_create_plate(plate_text, db)
+            if normalized_plate_text and is_valid_ro_plate:
+                plate = await _get_or_create_plate(normalized_plate_text, db)
                 detection.plate_id = plate.id
 
                 status, expires_at, _tid, _sid = await lookup_ticket(
-                    plate_text=plate_text,
+                    plate_text=normalized_plate_text,
                     zone_id=zone_id,
                     checked_at=datetime.now(UTC),
                     db=db,
