@@ -31,6 +31,13 @@ venv/
 __pycache__/
 *.pyc
 test_output/
-tests/fixtures
+tests/fixtures/*
+!tests/fixtures/clear_plate.jpg
+!tests/fixtures/no_plate.jpg
+!tests/fixtures/partial_plate.jpg
+!tests/fixtures/crops/
+tests/fixtures/crops/*
+!tests/fixtures/crops/*.jpg
 /debug_output.jpg
 /.github/
+/tests/fixtures/
