@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import cv2
+import easyocr
 import numpy as np
 
 
@@ -26,3 +27,23 @@ def preprocess_crop(crop: np.ndarray) -> np.ndarray:
         2,
     )
     return processed
+
+
+class PlateReader:
+    """Read plate text from image crops with EasyOCR."""
+
+    def __init__(self, gpu: bool = False) -> None:
+        self.reader = easyocr.Reader(["ro", "en"], gpu=gpu)
+
+    def read_plate(self, crop: np.ndarray) -> tuple[str, float]:
+        processed = preprocess_crop(crop)
+        results = self.reader.readtext(processed, detail=1, paragraph=False)
+
+        if not results:
+            return "", 0.0
+
+        raw_text = "".join(
+            r[1] for r in sorted(results, key=lambda r: r[0][0][0])
+        )
+        confidence = float(sum(r[2] for r in results) / len(results))
+        return raw_text, confidence
