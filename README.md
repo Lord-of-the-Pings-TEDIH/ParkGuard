@@ -9,6 +9,12 @@ Get-Content seed/parking_data.sql | docker exec -i -e PGPASSWORD=parkguard parkg
 ```
 *(For bash/Linux/macOS, you can use: `docker exec -i -e PGPASSWORD=parkguard parkguard-db psql -U parkguard -d parkguard < seed/parking_data.sql`)*
 
+## EasyOCR Model Download
+
+The first time EasyOCR is initialized with `easyocr.Reader(['ro', 'en'], gpu=False)`,
+it downloads model weights (about 100 MB) and caches them locally. Subsequent runs
+reuse the cached weights.
+
 ## Reset DB
 
 If you need to wipe the database and start fresh with a clean schema and seed data, follow these steps:
