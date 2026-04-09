@@ -156,7 +156,7 @@ async def test_valid_normalized_plate_triggers_lookup(
     await processor.process_session(
         session_obj.id,
         db,
-        ocr=lambda _crop: "0J05XYZ",
+        ocr=lambda _crop: "CJ05XY0",
         zone_id=1,
     )
 
@@ -169,11 +169,11 @@ async def test_valid_normalized_plate_triggers_lookup(
     ).scalars().one()
 
     lookup_mock.assert_awaited_once()
-    assert lookup_mock.await_args.kwargs["plate_text"] == "CJ05XYZ"
+    assert lookup_mock.await_args.kwargs["plate_text"] == "CJ05XYO"
     assert lookup_mock.await_args.kwargs["detection_id"] == detection.id
 
-    assert detection.ocr_raw_text == "0J05XYZ"
-    assert detection.ocr_normalized_text == "CJ05XYZ"
+    assert detection.ocr_raw_text == "CJ05XY0"
+    assert detection.ocr_normalized_text == "CJ05XYO"
     assert detection.is_valid_ro_plate is True
     assert detection.ticket_status == "active"
     assert detection.plate_id is not None

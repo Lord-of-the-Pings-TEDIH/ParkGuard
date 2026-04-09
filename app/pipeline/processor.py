@@ -22,7 +22,7 @@ from app.core.config import settings
 from app.models.detection import Detection, Frame, Plate, Session
 from app.pipeline.detector import PlateDetector
 from app.pipeline.frame_extractor import extract_frames
-from app.pipeline.plate_normalization import normalize_plate
+from app.pipeline.plate_validator import normalize_plate
 from app.services.ticket_lookup import lookup_ticket
 
 logger = logging.getLogger(__name__)
