@@ -41,3 +41,5 @@ tests/fixtures/crops/*
 /debug_output.jpg
 /.github/
 /tests/fixtures/
+*.md
+!README.md
