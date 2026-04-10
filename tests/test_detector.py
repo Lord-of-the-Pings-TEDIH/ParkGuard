@@ -22,7 +22,7 @@ FIXTURES = Path(__file__).parent / "fixtures"
 # ---------------------------------------------------------------------------
 
 def _make_box(
-    x1: float, y1: float, x2: float, y2: float, conf: float, cls: int = 2
+    x1: float, y1: float, x2: float, y2: float, conf: float, cls: int = 0
 ):
     """Return a mock object that behaves like a single ultralytics Box."""
     box = MagicMock()
