@@ -64,10 +64,10 @@ async def validation_exception_handler(request, exc):
     detail = "; ".join(errors)
     return JSONResponse({"detail": detail}, status_code=422)
 
-app.mount("/crops", StaticFiles(directory=settings.CROPS_DIR), name="crops")
-app.include_router(sessions_router, prefix="/sessions", tags=["sessions"])
-app.include_router(plates_router, prefix="/plates", tags=["plates"])
-app.include_router(parking_router, prefix="/parking", tags=["parking"])
+app.mount("/api/crops", StaticFiles(directory=settings.CROPS_DIR), name="crops")
+app.include_router(sessions_router, prefix="/api/sessions", tags=["sessions"])
+app.include_router(plates_router, prefix="/api/plates", tags=["plates"])
+app.include_router(parking_router, prefix="/api/parking", tags=["parking"])
 
 
 class HealthCheckOut(BaseModel):

@@ -3,12 +3,12 @@ from pathlib import Path
 from typing import List
 
 import aiofiles
-from fastapi import APIRouter, Depends, HTTPException, UploadFile
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, UploadFile
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
-from app.core.database import get_db
+from app.core.database import AsyncSessionLocal, get_db
 from app.models.detection import Detection, Frame, Session
 from app.pipeline.processor import process_session
 from app.schemas.detection import DetectionOut, SessionOut
@@ -26,7 +26,11 @@ async def list_sessions(db: AsyncSession = Depends(get_db)):
 
 
 @router.post("", response_model=SessionOut, status_code=201)
-async def create_session(file: UploadFile, db: AsyncSession = Depends(get_db)):
+async def create_session(
+    background_tasks: BackgroundTasks,
+    file: UploadFile,
+    db: AsyncSession = Depends(get_db),
+):
     session_id = uuid.uuid4()
     filename = file.filename or "unknown_file"
     dest = Path(settings.UPLOAD_DIR) / f"{session_id}_{filename}"
@@ -53,7 +57,25 @@ async def create_session(file: UploadFile, db: AsyncSession = Depends(get_db)):
     await db.commit()
     await db.refresh(new_session)
 
+    # Start processing in background
+    background_tasks.add_task(run_process_session, session_id)
+
     return new_session
+
+
+async def run_process_session(session_id: uuid.UUID):
+    """Background task wrapper for session processing."""
+    async with AsyncSessionLocal() as db:
+        try:
+            await process_session(session_id, db)
+        except Exception as e:
+            # We need to update the session status to 'failed' on error
+            session = await db.get(Session, session_id)
+            if session:
+                session.status = "failed"
+                session.error_message = str(e)
+                await db.commit()
+            print(f"Error processing session {session_id}: {e}")
 
 
 @router.post("/{session_id}/process", response_model=SessionOut)
