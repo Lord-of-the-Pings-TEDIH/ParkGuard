@@ -3,14 +3,15 @@ from pathlib import Path
 from typing import List
 
 import aiofiles
-from fastapi import APIRouter, Depends, HTTPException, UploadFile
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, UploadFile
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
-from app.core.database import get_db
+from app.core.database import AsyncSessionLocal, get_db
 from app.models.detection import Detection, Frame, Session
 from app.pipeline.processor import process_session
+from app.pipeline.worker import process_video
 from app.schemas.detection import DetectionOut, SessionOut
 from app.pipeline.frame_extractor import get_video_info
 
@@ -56,17 +57,32 @@ async def create_session(file: UploadFile, db: AsyncSession = Depends(get_db)):
     return new_session
 
 
-@router.post("/{session_id}/process", response_model=SessionOut)
+@router.post("/{session_id}/process", response_model=SessionOut, status_code=202)
 async def process_session_endpoint(
-    session_id: uuid.UUID, db: AsyncSession = Depends(get_db)
+    session_id: uuid.UUID,
+    background_tasks: BackgroundTasks,
+    db: AsyncSession = Depends(get_db),
 ):
-    """Run the ML pipeline on an uploaded session's video."""
+    """Kick off the ML pipeline as a FastAPI BackgroundTask.
+
+    Returns immediately with the session in its current (``pending``) state;
+    the worker flips it to ``running`` → ``done``/``failed`` asynchronously.
+    """
     session = await db.get(Session, session_id)
     if session is None:
         raise HTTPException(status_code=404, detail="Session not found")
 
-    await process_session(session_id, db)
-    await db.refresh(session)
+    video_path = Path(settings.UPLOAD_DIR) / f"{session_id}_{session.source_filename}"
+    if not video_path.exists():
+        raise HTTPException(status_code=404, detail="Uploaded video file missing")
+
+    background_tasks.add_task(
+        process_video,
+        session_id=session_id,
+        video_path=str(video_path),
+        fps_target=settings.FPS_TARGET,
+        db_factory=AsyncSessionLocal,
+    )
     return session
 
 
