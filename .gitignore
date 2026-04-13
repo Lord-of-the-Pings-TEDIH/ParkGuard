@@ -43,3 +43,10 @@ tests/fixtures/crops/*
 /tests/fixtures/
 *.md
 !README.md
+
+# Node
+node_modules/
+
+# Frontend
+/frontend/node_modules/
+/frontend/dist/
