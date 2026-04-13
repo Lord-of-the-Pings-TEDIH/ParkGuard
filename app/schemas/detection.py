@@ -55,7 +55,7 @@ class DetectionOut(BaseModel):
         if self.crop_image_path is None:
             return None
         filename = os.path.basename(self.crop_image_path)
-        return f"/crops/{filename}"
+        return f"/api/crops/{filename}"
 
 
 class SessionOut(BaseModel):

@@ -27,7 +27,11 @@ async def list_sessions(db: AsyncSession = Depends(get_db)):
 
 
 @router.post("", response_model=SessionOut, status_code=201)
-async def create_session(file: UploadFile, db: AsyncSession = Depends(get_db)):
+async def create_session(
+    background_tasks: BackgroundTasks,
+    file: UploadFile,
+    db: AsyncSession = Depends(get_db),
+):
     session_id = uuid.uuid4()
     filename = file.filename or "unknown_file"
     dest = Path(settings.UPLOAD_DIR) / f"{session_id}_{filename}"
@@ -54,10 +58,26 @@ async def create_session(file: UploadFile, db: AsyncSession = Depends(get_db)):
     await db.commit()
     await db.refresh(new_session)
 
+    # Start processing in background
+    background_tasks.add_task(run_process_session, session_id)
+
     return new_session
 
 
 @router.post("/{session_id}/process", response_model=SessionOut, status_code=202)
+async def run_process_session(session_id: uuid.UUID):
+    """Background task wrapper for session processing."""
+    async with AsyncSessionLocal() as db:
+        try:
+            await process_session(session_id, db)
+        except Exception as e:
+            # We need to update the session status to 'failed' on error
+            session = await db.get(Session, session_id)
+            if session:
+                session.status = "failed"
+                session.error_message = str(e)
+                await db.commit()
+            print(f"Error processing session {session_id}: {e}")
 async def process_session_endpoint(
     session_id: uuid.UUID,
     background_tasks: BackgroundTasks,
