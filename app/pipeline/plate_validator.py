@@ -1,138 +1,282 @@
-"""Romanian plate normalization and structural validation."""
+"""Romanian OCR plate cleanup, normalization and parsing."""
 
 from __future__ import annotations
 
 import re
-from typing import Final
+from typing import Final, Mapping
+
+NUM_TO_LET: Final[dict[str, str]] = {
+    "0": "O",
+    "1": "I",
+    "2": "Z",
+    "3": "B",
+    "4": "A",
+    "5": "S",
+    "6": "G",
+    "7": "T",
+    "8": "B",
+}
+
+LET_TO_NUM: Final[dict[str, str]] = {
+    "O": "0",
+    "I": "1",
+    "Z": "2",
+    "B": "8",
+    "S": "5",
+    "G": "6",
+    "T": "7",
+    "A": "4",
+    "Q": "0",
+    "l": "1",
+}
 
 COUNTY_CODES: Final[frozenset[str]] = frozenset(
     {
         "AB",
-        "AR",
         "AG",
+        "AR",
+        "B",
         "BC",
         "BH",
         "BN",
+        "BR",
         "BT",
         "BV",
-        "BR",
-        "B",
         "BZ",
-        "CS",
-        "CL",
         "CJ",
+        "CL",
+        "CS",
         "CT",
         "CV",
         "DB",
         "DJ",
+        "GJ",
         "GL",
         "GR",
-        "GJ",
-        "HR",
         "HD",
+        "HR",
+        "IF",
         "IL",
         "IS",
-        "IF",
-        "MM",
         "MH",
+        "MM",
         "MS",
         "NT",
         "OT",
         "PH",
-        "SM",
-        "SJ",
         "SB",
+        "SJ",
+        "SM",
         "SV",
-        "TR",
-        "TM",
         "TL",
-        "VS",
+        "TM",
+        "TR",
         "VL",
         "VN",
+        "VS",
     }
-)
-STANDARD_RE: Final[re.Pattern[str]] = re.compile(
-    r"^(B\d{2,3}[A-Z]{3}|[A-Z]{2}\d{2}[A-Z]{3})$"
 )
 
 _NON_ALNUM_RE: Final[re.Pattern[str]] = re.compile(r"[^A-Z0-9]")
-_BUCHAREST_RE: Final[re.Pattern[str]] = re.compile(r"^B\d{2,3}[A-Z]{3}$")
-_B_PREFIX_DIGIT_HINTS: Final[frozenset[str]] = frozenset("0123456789OISB")
-_COUNTY_CODE_CORRECTIONS: Final[dict[str, str]] = {"0": "O", "1": "I", "8": "B"}
-_DIGIT_CORRECTIONS: Final[dict[str, str]] = {"O": "0", "I": "1", "S": "5", "B": "8"}
-_LETTER_CORRECTIONS: Final[dict[str, str]] = {"0": "O", "1": "I", "5": "S", "8": "B"}
+_INSTITUTION_PREFIXES: Final[frozenset[str]] = frozenset({"MAI", "SPP", "GUV", "SEN"})
+_INSTITUTION_EQUIV: Final[dict[str, str]] = {"C": "G", **NUM_TO_LET}
+_DIPLO_FORCED_PREFIX: Final[dict[str, str]] = {
+    "CD": "CD",
+    "TC": "TC",
+    "CO": "CO",
+    "C0": "CD",
+    "T0": "TC",
+}
 
 
-def _replace_positions(
-    chars: list[str], positions: tuple[int, ...], replacements: dict[str, str]
-) -> None:
-    for idx in positions:
-        if idx < len(chars):
-            chars[idx] = replacements.get(chars[idx], chars[idx])
+def _invalid(reason: str) -> str:
+    return f"INVALID: {reason}"
+
+
+def is_invalid_plate(normalized: str) -> bool:
+    return normalized.startswith("INVALID:")
+
+
+def compact_plate(plate_text: str) -> str:
+    return _NON_ALNUM_RE.sub("", plate_text.upper())
+
+
+def apply_correction(text: str, mapping: Mapping[str, str]) -> str:
+    return "".join(mapping.get(char, char) for char in text)
+
+
+def is_valid_county(county: str) -> bool:
+    return county in COUNTY_CODES
 
 
 def _county_char_candidates(char: str) -> tuple[str, ...]:
+    base = [char]
+    mapped = NUM_TO_LET.get(char)
+    if mapped and mapped not in base:
+        base.append(mapped)
+    if char == "1" and "J" not in base:
+        base.append("J")
     if char == "0":
-        return ("O", "C")
-    corrected = _COUNTY_CODE_CORRECTIONS.get(char, char)
-    return (corrected,)
+        if "C" not in base:
+            base.append("C")
+        if "O" not in base:
+            base.append("O")
+    return tuple(base)
 
 
-def _correct_county_code(county_code: str) -> str:
-    if len(county_code) != 2:
-        return county_code
+def _normalize_county(raw_county: str) -> str:
+    if not raw_county:
+        return raw_county
+    if raw_county in COUNTY_CODES:
+        return raw_county
+    if len(raw_county) == 1:
+        return apply_correction(raw_county, NUM_TO_LET)
 
-    first_candidates = _county_char_candidates(county_code[0])
-    second_candidates = _county_char_candidates(county_code[1])
-    for first_char in first_candidates:
-        for second_char in second_candidates:
-            candidate = f"{first_char}{second_char}"
+    first_options = _county_char_candidates(raw_county[0])
+    second_options = _county_char_candidates(raw_county[1])
+    for first in first_options:
+        for second in second_options:
+            candidate = f"{first}{second}"
             if candidate in COUNTY_CODES:
                 return candidate
+    return apply_correction(raw_county, NUM_TO_LET)
 
-    return "".join(_COUNTY_CODE_CORRECTIONS.get(char, char) for char in county_code)
+
+def _clean(raw_text: str) -> str:
+    return _NON_ALNUM_RE.sub("", raw_text.upper())
 
 
-def _apply_ocr_corrections(text: str) -> str:
-    if len(text) != 7:
-        return text
+def _detect_institution_prefix(cleaned: str) -> str | None:
+    if len(cleaned) < 3:
+        return None
+    candidate = apply_correction(cleaned[:3], _INSTITUTION_EQUIV)
+    if candidate in _INSTITUTION_PREFIXES:
+        return candidate
+    return None
 
-    chars = list(text)
-    is_b_prefix_shape = (
-        _COUNTY_CODE_CORRECTIONS.get(chars[0], chars[0]) == "B"
-        and all(chars[idx] in _B_PREFIX_DIGIT_HINTS for idx in (1, 2, 3))
-    )
-    is_standard_shape = all(chars[idx] in _B_PREFIX_DIGIT_HINTS for idx in (2, 3))
 
-    if is_b_prefix_shape:
-        _replace_positions(chars, (0,), _COUNTY_CODE_CORRECTIONS)
-        _replace_positions(chars, (1, 2, 3), _DIGIT_CORRECTIONS)
-    elif is_standard_shape:
-        corrected_county = _correct_county_code("".join(chars[:2]))
-        chars[0], chars[1] = corrected_county[0], corrected_county[1]
-        _replace_positions(chars, (2, 3), _DIGIT_CORRECTIONS)
+def _parse_institution(cleaned: str, prefix: str) -> str:
+    digits = apply_correction(cleaned[3:], LET_TO_NUM)
+    if not digits.isdigit():
+        return _invalid("format instituție: sufix nenumeric")
+    if not 3 <= len(digits) <= 5:
+        return _invalid("format instituție: număr de cifre invalid")
+    return f"{prefix} {digits}"
+
+
+def _detect_diplomatic_prefix(cleaned: str) -> str | None:
+    if len(cleaned) < 2:
+        return None
+    return _DIPLO_FORCED_PREFIX.get(cleaned[:2])
+
+
+def _parse_diplomatic(cleaned: str, prefix: str) -> str:
+    digits = apply_correction(cleaned[2:], LET_TO_NUM)
+    if not digits.isdigit():
+        return _invalid("format diplomatic: sufix nenumeric")
+    if len(digits) != 6:
+        return _invalid("format diplomatic: necesare exact 6 cifre")
+    return f"{prefix} {digits[:3]} {digits[3:]}"
+
+
+def _is_army_candidate(cleaned: str) -> bool:
+    if not cleaned or cleaned[0] not in {"A", "4"}:
+        return False
+    if not 4 <= len(cleaned) <= 8:
+        return False
+    if len(cleaned) >= 6 and cleaned[-3:].isalpha():
+        return False
+    numeric_rest = apply_correction(cleaned[1:], LET_TO_NUM)
+    digit_count = sum(char.isdigit() for char in numeric_rest)
+    return digit_count >= len(numeric_rest) - 1
+
+
+def _parse_army(cleaned: str) -> str:
+    digits = apply_correction(cleaned[1:], LET_TO_NUM)
+    if not digits.isdigit():
+        return _invalid("format armată: sufix nenumeric")
+    if not 3 <= len(digits) <= 7:
+        return _invalid("format armată: număr de cifre invalid")
+    return f"A {digits}"
+
+
+def _looks_like_temporary(cleaned: str) -> bool:
+    if len(cleaned) < 4:
+        return False
+    suffix = cleaned[-3:]
+    if not apply_correction(suffix, LET_TO_NUM).isdigit():
+        return False
+    return sum(char.isdigit() for char in suffix) >= 2
+
+
+def _parse_temporary(cleaned: str) -> str:
+    if cleaned[0] in {"B", "8"}:
+        county = "B"
+        digits = apply_correction(cleaned[1:], LET_TO_NUM)
     else:
-        return text
+        if len(cleaned) < 3:
+            return _invalid("format provizoriu: prea scurt")
+        county = _normalize_county(cleaned[:2])
+        digits = apply_correction(cleaned[2:], LET_TO_NUM)
 
-    _replace_positions(chars, (4, 5, 6), _LETTER_CORRECTIONS)
-
-    return "".join(chars)
-
-
-def _county_code(plate: str) -> str:
-    if _BUCHAREST_RE.fullmatch(plate):
-        return "B"
-    return plate[:2]
+    if not is_valid_county(county):
+        return _invalid("județ invalid")
+    if not digits.isdigit():
+        return _invalid("format provizoriu: sufix nenumeric")
+    if len(digits) < 3:
+        return _invalid("format provizoriu: prea puține cifre")
+    return f"{county} {digits}"
 
 
-def normalize_plate(raw: str) -> tuple[str, bool]:
-    normalized = _NON_ALNUM_RE.sub("", raw.strip().upper())
-    if not normalized:
-        return normalized, False
+def _parse_standard(cleaned: str) -> str:
+    if len(cleaned) < 6:
+        return _invalid("format standard: prea scurt")
 
-    normalized = _apply_ocr_corrections(normalized)
+    letters = apply_correction(cleaned[-3:], NUM_TO_LET)
+    if not letters.isalpha():
+        return _invalid("format standard: ultimele 3 caractere trebuie litere")
 
-    if not STANDARD_RE.fullmatch(normalized):
-        return normalized, False
+    prefix = cleaned[:-3]
+    if not prefix:
+        return _invalid("format standard: prefix lipsă")
 
-    return normalized, _county_code(normalized) in COUNTY_CODES
+    if prefix[0] in {"B", "8"}:
+        county = "B"
+        digits = apply_correction(prefix[1:], LET_TO_NUM)
+        if not 2 <= len(digits) <= 3:
+            return _invalid("format standard București: necesare 2-3 cifre")
+    else:
+        if len(prefix) < 4:
+            return _invalid("format standard: prefix prea scurt")
+        county = _normalize_county(prefix[:2])
+        digits = apply_correction(prefix[2:], LET_TO_NUM)
+        if len(digits) != 2:
+            return _invalid("format standard: necesare 2 cifre după județ")
+
+    if not is_valid_county(county):
+        return _invalid("județ invalid")
+    if not digits.isdigit():
+        return _invalid("format standard: segment numeric invalid")
+    return f"{county} {digits} {letters}"
+
+
+def normalize_plate(raw_text: str) -> str:
+    cleaned = _clean(raw_text)
+    if not cleaned:
+        return _invalid("text gol după curățare")
+
+    institution_prefix = _detect_institution_prefix(cleaned)
+    if institution_prefix:
+        return _parse_institution(cleaned, institution_prefix)
+
+    diplomatic_prefix = _detect_diplomatic_prefix(cleaned)
+    if diplomatic_prefix:
+        return _parse_diplomatic(cleaned, diplomatic_prefix)
+
+    if _is_army_candidate(cleaned):
+        return _parse_army(cleaned)
+
+    if _looks_like_temporary(cleaned):
+        return _parse_temporary(cleaned)
+
+    return _parse_standard(cleaned)

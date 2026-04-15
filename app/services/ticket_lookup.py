@@ -1,3 +1,4 @@
+import re
 from datetime import datetime, time, timedelta, timezone
 
 from sqlalchemy import select, or_
@@ -7,6 +8,12 @@ UTC = timezone.utc
 
 from app.models.parking import ParkingTicket, ParkingSubscription, ParkingZone, TicketCheck
 from app.models.detection import Plate
+
+_NON_ALNUM_RE = re.compile(r"[^A-Z0-9]")
+
+
+def _canonical_plate_text(plate_text: str) -> str:
+    return _NON_ALNUM_RE.sub("", plate_text.upper())
 
 
 async def check_active_ticket(
@@ -181,32 +188,38 @@ async def lookup_ticket(
     unit tests that don't have a real ``detections`` row can still call
     this function without FK violations.
     """
+    canonical_plate = _canonical_plate_text(plate_text)
+
     # Step 1 – active ticket
     ticket_id: int | None = None
     sub_id: int | None = None
     expires_at: datetime | None = None
     status: str
 
-    ticket_match = await check_active_ticket(plate_text, zone_id, checked_at, db)
+    ticket_match = await check_active_ticket(canonical_plate, zone_id, checked_at, db)
     if ticket_match is not None:
         ticket_id, expires_at = ticket_match
         status = "active"
     else:
         # Step 2 – active subscription
-        sub_match = await _check_active_subscription(plate_text, zone_id, checked_at, db)
+        sub_match = await _check_active_subscription(
+            canonical_plate, zone_id, checked_at, db
+        )
         if sub_match is not None:
             sub_id, expires_at = sub_match
             status = "subscription"
         else:
             # Step 3 – grace period
-            grace_match = await _check_grace_period(plate_text, zone_id, checked_at, db)
+            grace_match = await _check_grace_period(
+                canonical_plate, zone_id, checked_at, db
+            )
             if grace_match is not None:
                 ticket_id, expires_at = grace_match
                 status = "grace"
             else:
                 # No coverage – distinguish known vs unknown plate
                 plate_exists = await db.execute(
-                    select(Plate.id).where(Plate.normalized_text == plate_text).limit(1)
+                    select(Plate.id).where(Plate.normalized_text == canonical_plate).limit(1)
                 )
                 if plate_exists.scalar_one_or_none() is not None:
                     status = "none"
@@ -217,7 +230,7 @@ async def lookup_ticket(
     if detection_id is not None:
         await write_ticket_check(
             detection_id=detection_id,
-            plate_text=plate_text,
+            plate_text=canonical_plate,
             checked_at=checked_at,
             status=status,
             matched_ticket_id=ticket_id,
