@@ -3,7 +3,6 @@ from pathlib import Path
 from typing import List
 
 import aiofiles
-import numpy as np
 from fastapi import APIRouter, Depends, HTTPException, UploadFile
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -11,29 +10,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.config import settings
 from app.core.database import get_db
 from app.models.detection import Detection, Frame, Session
-from app.pipeline.ocr import PlateReader
 from app.pipeline.processor import process_session
 from app.schemas.detection import DetectionOut, SessionOut
 from app.pipeline.frame_extractor import get_video_info
 
 router = APIRouter()
-_plate_reader: PlateReader | None = None
-
-
-def _get_plate_reader() -> PlateReader:
-    global _plate_reader
-    if _plate_reader is None:
-        _plate_reader = PlateReader(
-            gpu=False,
-            use_angle_cls=settings.OCR_USE_ANGLE_CLS,
-            lang="en",
-        )
-    return _plate_reader
-
-
-def _recognize_plate(crop: np.ndarray) -> tuple[str | None, float]:
-    text, confidence = _get_plate_reader().read_plate(crop)
-    return (text or None, confidence)
 
 
 @router.get("", response_model=List[SessionOut])
@@ -84,7 +65,7 @@ async def process_session_endpoint(
     if session is None:
         raise HTTPException(status_code=404, detail="Session not found")
 
-    await process_session(session_id, db, ocr=_recognize_plate)
+    await process_session(session_id, db)
     await db.refresh(session)
     return session
 
