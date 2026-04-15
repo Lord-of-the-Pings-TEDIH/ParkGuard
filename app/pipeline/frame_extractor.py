@@ -6,9 +6,37 @@ Utilities for extracting sampled frames from a video file using OpenCV.
 
 from __future__ import annotations
 
+import math
+
 import cv2
 import numpy as np
 from typing import Generator
+
+DEFAULT_VIDEO_FPS = 25.0
+
+
+def _validate_fps_target(fps_target: int) -> int:
+    if not isinstance(fps_target, int):
+        raise TypeError("fps_target must be an integer")
+    if fps_target <= 0:
+        raise ValueError("fps_target must be > 0")
+    return fps_target
+
+
+def _normalize_video_fps(raw_fps: float) -> float:
+    fps = float(raw_fps) if raw_fps is not None else 0.0
+    if not math.isfinite(fps) or fps <= 0.0:
+        return DEFAULT_VIDEO_FPS
+    return fps
+
+
+def _normalize_frame(frame: np.ndarray) -> np.ndarray:
+    """Ensure returned frames are 3-channel BGR arrays."""
+    if frame.ndim == 2:
+        return cv2.cvtColor(frame, cv2.COLOR_GRAY2BGR)
+    if frame.ndim == 3 and frame.shape[2] == 4:
+        return cv2.cvtColor(frame, cv2.COLOR_BGRA2BGR)
+    return frame
 
 
 def extract_frames(
@@ -40,14 +68,18 @@ def extract_frames(
     Raises
     ------
     ValueError
-        If the video file cannot be opened.
+        If *fps_target* is invalid or the video file cannot be opened.
     """
+    _validate_fps_target(fps_target)
+    if not isinstance(video_path, str) or not video_path.strip():
+        raise ValueError("video_path must be a non-empty string")
+
     cap = cv2.VideoCapture(video_path)
     if not cap.isOpened():
         raise ValueError(f"Cannot open video: {video_path!r}")
 
     try:
-        video_fps: float = cap.get(cv2.CAP_PROP_FPS) or 25.0  # default to 25 if unset
+        video_fps = _normalize_video_fps(cap.get(cv2.CAP_PROP_FPS))
         frame_interval: int = max(1, round(video_fps / fps_target))
 
         frame_index: int = 0
@@ -58,7 +90,7 @@ def extract_frames(
 
             if frame_index % frame_interval == 0:
                 pts_ms: int = round(frame_index / video_fps * 1000)
-                yield frame_index, pts_ms, frame
+                yield frame_index, pts_ms, _normalize_frame(frame)
 
             frame_index += 1
 
@@ -88,16 +120,19 @@ def get_video_info(path: str) -> dict:
     ValueError
         If the video file cannot be opened.
     """
+    if not isinstance(path, str) or not path.strip():
+        raise ValueError("path must be a non-empty string")
+
     cap = cv2.VideoCapture(path)
     if not cap.isOpened():
         raise ValueError(f"Cannot open video: {path!r}")
 
     try:
-        fps: float = cap.get(cv2.CAP_PROP_FPS)
-        total_frames: int = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
-        width: int = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
-        height: int = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
-        duration_s: float = (total_frames / fps) if fps else 0.0
+        fps = _normalize_video_fps(cap.get(cv2.CAP_PROP_FPS))
+        total_frames = max(0, int(cap.get(cv2.CAP_PROP_FRAME_COUNT)))
+        width = max(0, int(cap.get(cv2.CAP_PROP_FRAME_WIDTH)))
+        height = max(0, int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT)))
+        duration_s = total_frames / fps
     finally:
         cap.release()
 

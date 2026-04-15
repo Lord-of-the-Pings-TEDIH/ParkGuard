@@ -57,8 +57,6 @@ def detector():
         det = PlateDetector(model_path="fake.pt", conf_threshold=0.50)
         # Expose the mock so tests can configure return values
         det._mock_model = mock_model
-        det.plate_cascade = MagicMock()
-        det.plate_cascade.detectMultiScale.return_value = [(20, 10, 120, 40)]
         yield det
 
 
