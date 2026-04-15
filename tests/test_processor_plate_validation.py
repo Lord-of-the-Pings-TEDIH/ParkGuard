@@ -61,12 +61,20 @@ class FakeDetector:
         self.model_path = model_path
         self.conf_threshold = conf_threshold
 
-    def detect(self, frame: np.ndarray) -> list[dict]:
+    def detect(self, frame: np.ndarray, frame_index: int = 0) -> list[dict]:
+        _ = frame, frame_index
         return [{"bbox": (1, 1, 4, 2), "confidence": 0.93}]
+
+    @staticmethod
+    def crop_plate(frame: np.ndarray, bbox: tuple[int, int, int, int], padding: int = 0) -> np.ndarray:
+        x, y, w, h = bbox
+        _ = padding
+        return frame[y : y + h, x : x + w]
 
 
 def _single_frame(*_args, **_kwargs) -> list[tuple[int, int, np.ndarray]]:
-    frame = np.zeros((8, 12, 3), dtype=np.uint8)
+    frame = np.zeros((24, 48, 3), dtype=np.uint8)
+    frame[:, ::2] = 255
     return [(0, 0, frame)]
 
 
@@ -88,6 +96,10 @@ def _configure_processor(
 ) -> None:
     monkeypatch.setattr(processor.settings, "UPLOAD_DIR", str(uploads_dir), raising=False)
     monkeypatch.setattr(processor.settings, "CROPS_DIR", str(crops_dir), raising=False)
+    monkeypatch.setattr(processor.settings, "OCR_MIN_SHARPNESS", 0.0, raising=False)
+    monkeypatch.setattr(processor.settings, "OCR_ANGLES", "0", raising=False)
+    monkeypatch.setattr(processor.settings, "OCR_MIN_CONF", 0.1, raising=False)
+    monkeypatch.setattr(processor.settings, "MIN_TRACK_VOTES", 1, raising=False)
     monkeypatch.setattr(processor, "PlateDetector", FakeDetector)
     monkeypatch.setattr(processor, "extract_frames", _single_frame)
     monkeypatch.setattr(processor, "lookup_ticket", lookup_mock)

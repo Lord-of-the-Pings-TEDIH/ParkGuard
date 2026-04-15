@@ -1,8 +1,6 @@
-import os
 import cv2
 import numpy as np
 import pytest
-import tempfile
 from app.pipeline.frame_extractor import extract_frames, get_video_info
 
 
@@ -73,8 +71,9 @@ def test_get_video_info(test_video):
     assert info['duration_s'] == 2.0
 
 
-def test_real_video_extraction():
-    video_path = "tests/fixtures/real_test_video.mp4"
+def test_real_video_extraction(tmp_path):
+    video_path = str(tmp_path / "real_test_video.mp4")
+    create_test_video(video_path, fps=25, num_frames=250)
     gen = extract_frames(video_path, fps_target=5)
     
     # Get the first frame to initialize the generator and open the cap
@@ -99,4 +98,3 @@ def test_real_video_extraction():
         
     # 4. Test that VideoCapture is closed after iteration
     assert cap.isOpened() == False
-

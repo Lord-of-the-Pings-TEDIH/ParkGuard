@@ -7,14 +7,11 @@ call is faked.
 
 from __future__ import annotations
 
-from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import cv2
 import numpy as np
 import pytest
-
-FIXTURES = Path(__file__).parent / "fixtures"
 
 
 # ---------------------------------------------------------------------------
@@ -39,6 +36,11 @@ def _make_yolo_result(boxes: list | None):
     return [result]
 
 
+def _dummy_frame() -> np.ndarray:
+    """Create a synthetic frame so tests don't depend on image fixtures."""
+    return np.zeros((720, 1280, 3), dtype=np.uint8)
+
+
 # ---------------------------------------------------------------------------
 # Fixture: a PlateDetector with a mocked YOLO model
 # ---------------------------------------------------------------------------
@@ -48,6 +50,7 @@ def detector():
     """Return a PlateDetector whose internal YOLO model is a MagicMock."""
     with patch("app.pipeline.detector.YOLO") as MockYOLO:
         mock_model = MagicMock()
+        mock_model.names = {}
         MockYOLO.return_value = mock_model
 
         from app.pipeline.detector import PlateDetector
@@ -65,8 +68,7 @@ def detector():
 
 class TestDetectClearPlate:
     def test_returns_at_least_one_result(self, detector):
-        frame = cv2.imread(str(FIXTURES / "clear_plate.jpg"))
-        assert frame is not None, "clear_plate.jpg fixture missing"
+        frame = _dummy_frame()
 
         # Simulate YOLO finding one plate
         detector._mock_model.return_value = _make_yolo_result(
@@ -79,7 +81,7 @@ class TestDetectClearPlate:
         assert len(results) >= 1
 
     def test_confidence_is_float_between_0_and_1(self, detector):
-        frame = cv2.imread(str(FIXTURES / "clear_plate.jpg"))
+        frame = _dummy_frame()
 
         detector._mock_model.return_value = _make_yolo_result(
             [_make_box(500, 350, 780, 420, 0.87)]
@@ -92,7 +94,7 @@ class TestDetectClearPlate:
             assert 0.0 <= det["confidence"] <= 1.0
 
     def test_bbox_is_tuple_of_four_ints(self, detector):
-        frame = cv2.imread(str(FIXTURES / "clear_plate.jpg"))
+        frame = _dummy_frame()
 
         detector._mock_model.return_value = _make_yolo_result(
             [_make_box(500, 350, 780, 420, 0.92)]
@@ -107,7 +109,7 @@ class TestDetectClearPlate:
             assert all(isinstance(v, int) for v in bbox)
 
     def test_multiple_detections(self, detector):
-        frame = cv2.imread(str(FIXTURES / "clear_plate.jpg"))
+        frame = _dummy_frame()
 
         detector._mock_model.return_value = _make_yolo_result([
             _make_box(500, 350, 780, 420, 0.92),
@@ -127,8 +129,7 @@ class TestDetectClearPlate:
 
 class TestDetectNoPlate:
     def test_returns_empty_list_when_boxes_none(self, detector):
-        frame = cv2.imread(str(FIXTURES / "no_plate.jpg"))
-        assert frame is not None, "no_plate.jpg fixture missing"
+        frame = _dummy_frame()
 
         detector._mock_model.return_value = _make_yolo_result(boxes=None)
 
@@ -137,7 +138,7 @@ class TestDetectNoPlate:
         assert results == []
 
     def test_returns_empty_list_when_boxes_empty(self, detector):
-        frame = cv2.imread(str(FIXTURES / "no_plate.jpg"))
+        frame = _dummy_frame()
 
         # boxes is an iterable but empty
         detector._mock_model.return_value = _make_yolo_result(boxes=[])
@@ -153,8 +154,7 @@ class TestDetectNoPlate:
 
 class TestDetectPartialPlate:
     def test_partial_plate_still_returned_if_above_threshold(self, detector):
-        frame = cv2.imread(str(FIXTURES / "partial_plate.jpg"))
-        assert frame is not None, "partial_plate.jpg fixture missing"
+        frame = _dummy_frame()
 
         # Model returns the partial plate with lower confidence
         detector._mock_model.return_value = _make_yolo_result(

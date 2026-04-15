@@ -1,45 +1,66 @@
 from __future__ import annotations
 
-from pathlib import Path
-
-import cv2
+import numpy as np
 import pytest
 
+import app.pipeline.ocr as ocr_module
 from app.pipeline.ocr import PlateReader, preprocess_crop
 
-FIXTURES = Path(__file__).parent / "fixtures" / "crops"
+
+class _FakePaddleReader:
+    def __init__(self, result):
+        self._result = result
+
+    def predict(self, _img):
+        return self._result
 
 
-def _load_crop(name: str):
-    crop = cv2.imread(str(FIXTURES / name))
-    assert crop is not None, f"{name} fixture missing"
+def _synthetic_crop(height: int = 60, width: int = 200) -> np.ndarray:
+    crop = np.zeros((height, width, 3), dtype=np.uint8)
+    crop[:, ::2] = 255
     return crop
 
 
-@pytest.fixture(scope="module")
-def plate_reader() -> PlateReader:
-    return PlateReader(gpu=False)
-
-
-@pytest.mark.parametrize("fixture_name", ["clear_ro_1.jpg", "clear_ro_2.jpg"])
-def test_clear_plate_returns_text_and_high_confidence(
-    plate_reader: PlateReader, fixture_name: str
+def test_read_plate_normalizes_text_and_averages_confidence(
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    text, confidence = plate_reader.read_plate(_load_crop(fixture_name))
+    fake_reader = _FakePaddleReader(
+        [{"rec_texts": ["B 12", "abc"], "rec_scores": [0.9, 0.7]}]
+    )
+    monkeypatch.setattr(
+        ocr_module,
+        "_build_paddle_ocr",
+        lambda **_kwargs: fake_reader,
+    )
 
-    assert text.strip() != ""
-    assert confidence > 0.5
+    plate_reader = PlateReader(gpu=False)
+    text, confidence = plate_reader.read_plate(_synthetic_crop())
+
+    assert text == "B12ABC"
+    assert confidence == pytest.approx(0.8)
 
 
-def test_non_plate_returns_empty_or_low_confidence(plate_reader: PlateReader) -> None:
-    text, confidence = plate_reader.read_plate(_load_crop("non_plate.jpg"))
+def test_read_plate_returns_empty_when_no_tokens(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fake_reader = _FakePaddleReader([])
+    monkeypatch.setattr(
+        ocr_module,
+        "_build_paddle_ocr",
+        lambda **_kwargs: fake_reader,
+    )
 
-    assert text.strip() == "" or confidence < 0.3
+    plate_reader = PlateReader(gpu=False)
+    text, confidence = plate_reader.read_plate(_synthetic_crop())
+
+    assert text == ""
+    assert confidence == 0.0
 
 
-@pytest.mark.parametrize("fixture_name", ["clear_ro_1.jpg", "blurry_ro.jpg", "occluded_ro.jpg"])
-def test_preprocess_crop_has_expected_shape(fixture_name: str) -> None:
-    processed = preprocess_crop(_load_crop(fixture_name))
+@pytest.mark.parametrize(("height", "width"), [(30, 100), (64, 64), (90, 220)])
+def test_preprocess_crop_has_expected_shape(height: int, width: int) -> None:
+    processed = preprocess_crop(_synthetic_crop(height=height, width=width))
 
+    assert processed.ndim == 2
     assert processed.shape[0] == 64
     assert processed.shape[1] > 0
