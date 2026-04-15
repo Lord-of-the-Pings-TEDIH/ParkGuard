@@ -29,6 +29,16 @@ def test_extract_frames_invalid_path():
         list(extract_frames("nonexistent.mp4", fps_target=10))
 
 
+def test_extract_frames_invalid_fps_target():
+    with pytest.raises(ValueError, match="fps_target must be > 0"):
+        list(extract_frames("nonexistent.mp4", fps_target=0))
+
+
+def test_extract_frames_non_int_fps_target():
+    with pytest.raises(TypeError, match="fps_target must be an integer"):
+        list(extract_frames("nonexistent.mp4", fps_target=10.5))  # type: ignore[arg-type]
+
+
 def test_extract_frames_target_fps(test_video):
     # Original video is 30 FPS, target is 10 FPS
     # So we expect roughly 30/10 = 3 frame interval, meaning we take 1 frame every 3 frames
@@ -69,6 +79,11 @@ def test_get_video_info(test_video):
     assert info['width'] == 100
     assert info['height'] == 100
     assert info['duration_s'] == 2.0
+
+
+def test_get_video_info_empty_path():
+    with pytest.raises(ValueError, match="path must be a non-empty string"):
+        get_video_info("")
 
 
 def test_real_video_extraction(tmp_path):
