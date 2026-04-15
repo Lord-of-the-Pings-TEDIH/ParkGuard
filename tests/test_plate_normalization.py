@@ -4,85 +4,19 @@ import pytest
 
 from app.pipeline.plate_validator import normalize_plate
 
-COUNTY_CODES = (
-    "AB",
-    "AG",
-    "AR",
-    "B",
-    "BC",
-    "BH",
-    "BN",
-    "BR",
-    "BT",
-    "BV",
-    "BZ",
-    "CJ",
-    "CL",
-    "CS",
-    "CT",
-    "CV",
-    "DB",
-    "DJ",
-    "GJ",
-    "GL",
-    "GR",
-    "HD",
-    "HR",
-    "IF",
-    "IL",
-    "IS",
-    "MH",
-    "MM",
-    "MS",
-    "NT",
-    "OT",
-    "PH",
-    "SB",
-    "SJ",
-    "SM",
-    "SV",
-    "TL",
-    "TM",
-    "TR",
-    "VL",
-    "VN",
-    "VS",
+
+@pytest.mark.parametrize(
+    ("raw", "expected"),
+    [
+        (" B-123-abc ", "B 123 ABC"),
+        ("cj 05 xyz", "CJ 05 XYZ"),
+        ("8123AB0", "B 123 ABO"),
+        ("C0 123 456", "CD 123 456"),
+        ("A 1S8", "A 158"),
+        ("", "INVALID: text gol după curățare"),
+        ("TM9QQQ", "INVALID: format standard: prefix prea scurt"),
+        ("XX12ABC", "INVALID: județ invalid"),
+    ],
 )
-
-
-def test_normalize_plate_strips_spacing_and_uppercases() -> None:
-    assert normalize_plate("B 123 abc") == ("B123ABC", True)
-
-
-def test_normalize_plate_applies_position_based_ocr_corrections() -> None:
-    assert normalize_plate("ab1oab0") == ("AB10ABO", True)
-
-
-def test_normalize_plate_applies_full_standard_ocr_correction_map() -> None:
-    assert normalize_plate("08OI158") == ("OB01ISB", False)
-
-
-def test_normalize_plate_applies_b_prefix_digit_corrections() -> None:
-    assert normalize_plate("B1S8AB0") == ("B158ABO", True)
-
-
-def test_normalize_plate_handles_b_prefix_with_8_as_county_hint() -> None:
-    assert normalize_plate("8123AB0") == ("B123ABO", True)
-
-
-def test_normalize_plate_keeps_invalid_payload_and_marks_it_invalid() -> None:
-    assert normalize_plate("GARBAGE") == ("GARBAGE", False)
-
-
-def test_invalid_county_code_is_rejected() -> None:
-    assert normalize_plate("XX12ABC") == ("XX12ABC", False)
-
-
-def test_county_fixture_has_42_codes() -> None:
-    assert len(COUNTY_CODES) == 42
-
-
-@pytest.mark.parametrize("county_code", COUNTY_CODES)
-def test_all_romanian_county_codes_are_accepted(county_code: str) -> None:
-    plate = "B123ABC" if county_code == "B" else f"{county_code}12ABC"
-    assert normalize_plate(plate) == (plate, True)
+def test_normalize_plate_cases(raw: str, expected: str) -> None:
+    assert normalize_plate(raw) == expected

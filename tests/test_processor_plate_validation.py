@@ -138,7 +138,7 @@ async def test_invalid_plate_does_not_trigger_lookup(
     ).scalars().one()
 
     assert detection.ocr_raw_text == "GARBAGE"
-    assert detection.ocr_normalized_text == "GARBAGE"
+    assert detection.ocr_normalized_text == "INVALID: județ invalid"
     assert detection.is_valid_ro_plate is False
     assert detection.plate_id is None
     assert detection.ticket_status is None
@@ -185,7 +185,7 @@ async def test_valid_normalized_plate_triggers_lookup(
     assert lookup_mock.await_args.kwargs["detection_id"] == detection.id
 
     assert detection.ocr_raw_text == "CJ05XY0"
-    assert detection.ocr_normalized_text == "CJ05XYO"
+    assert detection.ocr_normalized_text == "CJ 05 XYO"
     assert detection.is_valid_ro_plate is True
     assert detection.ticket_status == "active"
     assert detection.plate_id is not None

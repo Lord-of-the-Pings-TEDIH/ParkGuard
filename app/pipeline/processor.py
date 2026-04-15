@@ -26,7 +26,7 @@ from app.models.detection import Detection, Frame, Plate, Session
 from app.pipeline.deskew import deskew_plate
 from app.pipeline.detector import PlateDetector
 from app.pipeline.frame_extractor import extract_frames
-from app.pipeline.plate_validator import normalize_plate
+from app.pipeline.plate_validator import compact_plate, is_invalid_plate, normalize_plate
 from app.services.ticket_lookup import lookup_ticket
 
 logger = logging.getLogger(__name__)
@@ -154,7 +154,8 @@ def _best_ocr_candidate(
         candidate_image = _rotate_bound(crop, angle)
         raw_text, confidence = _read_with_recognizer(recognize, candidate_image)
         if raw_text:
-            normalized, is_valid = normalize_plate(raw_text)
+            normalized = normalize_plate(raw_text)
+            is_valid = not is_invalid_plate(normalized)
             candidate = OCRCandidate(
                 raw_text=raw_text,
                 confidence=confidence,
@@ -419,11 +420,12 @@ async def process_session(
             await db.flush()
 
             if normalized_plate_text and is_valid_ro_plate:
-                plate = await _get_or_create_plate(normalized_plate_text, db)
+                compact_text = compact_plate(normalized_plate_text)
+                plate = await _get_or_create_plate(compact_text, db)
                 detection.plate_id = plate.id
 
                 status, expires_at, _tid, _sid = await lookup_ticket(
-                    plate_text=normalized_plate_text,
+                    plate_text=compact_text,
                     zone_id=zone_id,
                     checked_at=datetime.now(UTC),
                     db=db,

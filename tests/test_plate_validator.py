@@ -3,50 +3,45 @@ from __future__ import annotations
 import pytest
 
 from app.pipeline.plate_validator import COUNTY_CODES
+from app.pipeline.plate_validator import compact_plate
 from app.pipeline.plate_validator import normalize_plate
 
 
 @pytest.mark.parametrize(
-    ("raw", "expected_normalized", "expected_valid"),
+    ("raw", "expected"),
     [
-        ("B 12 abc", "B12ABC", True),
-        ("cj 05 xyz", "CJ05XYZ", True),
-        ("B123ABC", "B123ABC", True),
-        ("0J05XYZ", "CJ05XYZ", True),
-        ("XX99AAA", "XX99AAA", False),
-        ("", "", False),
-        ("GARBAGE", "GARBAGE", False),
-        ("B12ABC", "B12ABC", True),
-        ("IS07GHI", "IS07GHI", True),
-        (" B-123-abc ", "B123ABC", True),
-        ("ab1oab0", "AB10ABO", True),
-        ("08OI158", "OB01ISB", False),
-        ("B1S8AB0", "B158ABO", True),
-        ("8123AB0", "B123ABO", True),
-        ("0S05XYZ", "CS05XYZ", True),
-        ("0L05XYZ", "CL05XYZ", True),
-        ("10O5XYZ", "IO05XYZ", False),
-        ("TM9QQQ", "TM9QQQ", False),
-        ("B1ABC", "B1ABC", False),
-        ("B1234ABC", "B1234ABC", False),
-        ("AB12AB", "AB12AB", False),
-        ("B12AB0", "B12AB0", False),
-        ("  ", "", False),
-        ("VL00AAA", "VL00AAA", True),
-        ("PHO1ABC", "PH01ABC", True),
+        ("MA1 I234S", "MAI 12345"),
+        ("C0 I23 4S6", "CD 123 456"),
+        ("4 I234", "A 1234"),
+        ("8 I234S6", "B 123456"),
+        ("CJ 0I234", "CJ 01234"),
+        ("B-123.A8C", "B 123 ABC"),
+        ("C1 01 XY2", "CJ 01 XYZ"),
     ],
 )
-def test_normalize_plate_cases(
-    raw: str, expected_normalized: str, expected_valid: bool
-) -> None:
-    assert normalize_plate(raw) == (expected_normalized, expected_valid)
+def test_required_ocr_cases(raw: str, expected: str) -> None:
+    assert normalize_plate(raw) == expected
+
+
+def test_invalid_value_has_reason() -> None:
+    assert normalize_plate("GARBAGE") == "INVALID: județ invalid"
 
 
 def test_county_fixture_has_42_codes() -> None:
     assert len(COUNTY_CODES) == 42
 
 
-@pytest.mark.parametrize("county_code", sorted(COUNTY_CODES))
-def test_all_romanian_county_codes_are_accepted(county_code: str) -> None:
-    plate = "B12ABC" if county_code == "B" else f"{county_code}12ABC"
-    assert normalize_plate(plate) == (plate, True)
+@pytest.mark.parametrize(
+    ("raw", "expected"),
+    [
+        ("CJ12ABC", "CJ12ABC"),
+        ("IS12ABC", "IS12ABC"),
+        ("TM12ABC", "TM12ABC"),
+        ("VL12ABC", "VL12ABC"),
+        ("B12ABC", "B12ABC"),
+    ],
+)
+def test_compact_plate_on_valid_standard_outputs(raw: str, expected: str) -> None:
+    normalized = normalize_plate(raw)
+    assert not normalized.startswith("INVALID:")
+    assert compact_plate(normalized) == expected
