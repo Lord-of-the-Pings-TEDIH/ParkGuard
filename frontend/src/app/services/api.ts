@@ -24,6 +24,8 @@ interface BackendDetection {
   ticket_status: Detection["ticket_status"] | null;
   ticket_expires_at: string | null;
   created_at: string;
+  voting_tag?: Detection["voting_tag"] | null;
+  plate_annotation?: string | null;
 }
 
 interface BackendPlate {
@@ -104,7 +106,71 @@ function mapDetection(detection: BackendDetection): Detection {
     ticket_status: detection.ticket_status ?? "unknown",
     ticket_expires_at: detection.ticket_expires_at,
     created_at: detection.created_at,
+    voting_tag: detection.voting_tag ?? "not_final",
+    plate_annotation:
+      detection.plate_annotation ??
+      (detection.ocr_normalized_text ?? detection.ocr_raw_text ?? detection.id),
+    occurrences: 1,
   };
+}
+
+function isInvalidText(text: string): boolean {
+  return (text || "").toUpperCase().startsWith("INVALID:");
+}
+
+function shouldPreferDetection(candidate: Detection, current: Detection): boolean {
+  if (candidate.voting_tag !== current.voting_tag) {
+    return candidate.voting_tag === "final";
+  }
+
+  if (candidate.is_valid_ro_plate !== current.is_valid_ro_plate) {
+    return candidate.is_valid_ro_plate;
+  }
+
+  const candidateKnownTicket = candidate.ticket_status !== "unknown";
+  const currentKnownTicket = current.ticket_status !== "unknown";
+  if (candidateKnownTicket !== currentKnownTicket) {
+    return candidateKnownTicket;
+  }
+
+  if (candidate.detection_confidence !== current.detection_confidence) {
+    return candidate.detection_confidence > current.detection_confidence;
+  }
+
+  return new Date(candidate.created_at).getTime() > new Date(current.created_at).getTime();
+}
+
+function dedupeDetectionsByAnnotation(detections: Detection[]): Detection[] {
+  const groups = new Map<string, Detection>();
+  const counts = new Map<string, number>();
+
+  for (const detection of detections) {
+    const fallback = detection.ocr_normalized_text || detection.ocr_raw_text || detection.id;
+    const key = detection.plate_annotation || fallback || detection.id;
+    const current = groups.get(key);
+
+    counts.set(key, (counts.get(key) ?? 0) + 1);
+    if (!current || shouldPreferDetection(detection, current)) {
+      groups.set(key, detection);
+    }
+  }
+
+  const deduped = Array.from(groups.entries()).map(([key, detection]) => ({
+    ...detection,
+    plate_annotation: key,
+    occurrences: counts.get(key) ?? 1,
+  }));
+
+  // Hide invalid OCR rows from the realtime feed.
+  const validFirst = deduped.filter(
+    (detection) =>
+      detection.is_valid_ro_plate &&
+      !isInvalidText(detection.ocr_normalized_text)
+  );
+
+  return validFirst.sort(
+    (a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
+  );
 }
 
 function mapPlate(plate: BackendPlate): Plate {
@@ -181,28 +247,20 @@ export async function getDetections(sessionId: string): Promise<Detection[]> {
   const detections = await fetchApi<BackendDetection[]>(
     `${API_BASE}/sessions/${sessionId}/detections`
   );
-  return detections.map(mapDetection);
+  return dedupeDetectionsByAnnotation(detections.map(mapDetection));
 }
 
-export async function searchPlates(query: string, county?: string): Promise<Plate[]> {
+export async function searchPlates(
+  query: string,
+  county?: string,
+  signal?: AbortSignal
+): Promise<Plate[]> {
   const params = new URLSearchParams();
   if (query) params.append("q", query);
   if (county) params.append("county", county);
 
-  const plates = await fetchApi<BackendPlate[]>(`${API_BASE}/plates?${params.toString()}`);
-  const mapped = plates.map(mapPlate);
-
-  let filtered = mapped;
-  if (query) {
-    filtered = filtered.filter((p) =>
-      p.normalized_text.toLowerCase().includes(query.toLowerCase())
-    );
-  }
-  if (county) {
-    filtered = filtered.filter(
-      (p) => p.county_code.toLowerCase() === county.toLowerCase()
-    );
-  }
-
-  return filtered;
+  const plates = await fetchApi<BackendPlate[]>(`${API_BASE}/plates?${params.toString()}`, {
+    signal,
+  });
+  return plates.map(mapPlate);
 }

@@ -1,7 +1,6 @@
-import { useState, useEffect } from "react";
+import { useEffect, useState } from "react";
 import { Search } from "lucide-react";
 import { Input } from "./ui/input";
-import { ScrollArea } from "./ui/scroll-area";
 import { RomanianPlate } from "./RomanianPlate";
 import { TicketStatusBadge } from "./TicketStatusBadge";
 import { searchPlates } from "../services/api";
@@ -13,34 +12,56 @@ export function PlateSearch() {
   const [county, setCounty] = useState("");
   const [plates, setPlates] = useState<Plate[]>([]);
   const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
+    const trimmedQuery = query.trim();
+    const normalizedCounty = county.trim().toUpperCase();
+    const shouldSearch = trimmedQuery.length >= 2 || normalizedCounty.length > 0;
+
+    if (!shouldSearch) {
+      setPlates([]);
+      setError(null);
+      setLoading(false);
+      return;
+    }
+
+    const controller = new AbortController();
     const timer = setTimeout(() => {
-      if (query.length >= 2 || county) {
-        fetchPlates();
-      } else {
-        setPlates([]);
-      }
+      void fetchPlates(trimmedQuery, normalizedCounty, controller.signal);
     }, 300);
 
-    return () => clearTimeout(timer);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    return () => {
+      controller.abort();
+      clearTimeout(timer);
+    };
   }, [query, county]);
 
-  const fetchPlates = async () => {
+  const fetchPlates = async (
+    searchQuery: string,
+    searchCounty: string,
+    signal: AbortSignal
+  ) => {
     setLoading(true);
+    setError(null);
     try {
-      const results = await searchPlates(query, county);
+      const results = await searchPlates(searchQuery, searchCounty, signal);
       setPlates(results);
     } catch (error) {
+      if (signal.aborted) {
+        return;
+      }
       console.error("Failed to search plates:", error);
+      setError(error instanceof Error ? error.message : "Search failed");
     } finally {
-      setLoading(false);
+      if (!signal.aborted) {
+        setLoading(false);
+      }
     }
   };
 
   return (
-    <div className="flex h-full flex-col lg:border-l border-border bg-card">
+    <div className="flex h-full min-h-0 flex-col border-border bg-card lg:border-l">
       <div className="border-b border-border bg-gradient-to-r from-cyan-50 to-blue-50 p-3 dark:from-cyan-950 dark:to-blue-950 md:p-4">
         <h3 className="mb-3 font-medium text-foreground">Registry</h3>
 
@@ -58,7 +79,9 @@ export function PlateSearch() {
           <Input
             placeholder="County code (e.g. B, CJ)"
             value={county}
-            onChange={(e) => setCounty(e.target.value.toUpperCase())}
+            onChange={(e) =>
+              setCounty(e.target.value.toUpperCase().replace(/[^A-Z]/g, "").slice(0, 2))
+            }
             className="text-center"
           />
         </div>
@@ -70,8 +93,14 @@ export function PlateSearch() {
         )}
       </div>
 
-      <ScrollArea className="flex-1">
+      <div className="min-h-0 flex-1 overflow-y-auto">
         <div className="space-y-3 p-3">
+          {error && (
+            <div className="rounded-lg border border-red-300 bg-red-50 p-3 text-xs text-red-700 dark:border-red-800 dark:bg-red-950/40 dark:text-red-300">
+              {error}
+            </div>
+          )}
+
           {loading && (
             <div className="py-8 text-center text-sm text-muted-foreground">
               Searching...
@@ -125,7 +154,7 @@ export function PlateSearch() {
             </div>
           ))}
         </div>
-      </ScrollArea>
+      </div>
     </div>
   );
 }
