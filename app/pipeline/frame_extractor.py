@@ -84,11 +84,14 @@ def extract_frames(
 
         frame_index: int = 0
         while True:
-            ret, frame = cap.read()
+            ret = cap.grab()
             if not ret:
                 break
 
             if frame_index % frame_interval == 0:
+                ret, frame = cap.retrieve()
+                if not ret:
+                    break
                 pts_ms: int = round(frame_index / video_fps * 1000)
                 yield frame_index, pts_ms, _normalize_frame(frame)
 

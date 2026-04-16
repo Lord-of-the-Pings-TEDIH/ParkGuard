@@ -15,7 +15,7 @@ export function ResultsView({ session, detections, onReset }: ResultsViewProps) 
   const stats = calculateStats(detections);
 
   return (
-    <div className="flex h-full flex-col">
+    <div className="flex h-full min-h-0 flex-col">
       {/* Header with stats */}
       <motion.div
         initial={{ opacity: 0, y: -20 }}
@@ -72,8 +72,8 @@ export function ResultsView({ session, detections, onReset }: ResultsViewProps) 
       </motion.div>
 
       {/* Detection results */}
-      <div className="flex-1 overflow-y-auto bg-background p-4 md:p-6">
-        <div className="mb-4 flex items-center justify-between">
+      <div className="min-h-0 flex-1 overflow-y-auto bg-background p-4 md:p-6">
+        <div className="mb-4 flex flex-wrap items-center justify-between gap-2">
           <h3 className="font-medium text-foreground">Detections</h3>
           <span className="rounded-full bg-gradient-to-r from-blue-100 to-indigo-100 px-3 py-1 text-sm font-medium text-blue-700 dark:from-blue-900 dark:to-indigo-900 dark:text-blue-300">
             {detections.length}

@@ -1,14 +1,15 @@
-import { Trash2, PlayCircle } from "lucide-react";
+import { Trash2, PlayCircle, Loader2 } from "lucide-react";
 import { motion } from "motion/react";
 import { Button } from "./ui/button";
-import { ScrollArea } from "./ui/scroll-area";
-import { formatRelativeTime, formatDateTime } from "../utils/format";
+import { formatRelativeTime } from "../utils/format";
 import type { Session } from "../types";
 
 interface SessionHistoryProps {
   sessions: Session[];
   testFiles: string[];
   activeSessionId: string | null;
+  pendingSessionId: string | null;
+  pendingTestFile: string | null;
   onSelectSession: (id: string) => void;
   onDeleteSession: (id: string) => void;
   onRunHardcodedTest: (filename: string) => void;
@@ -18,18 +19,20 @@ export function SessionHistory({
   sessions,
   testFiles,
   activeSessionId,
+  pendingSessionId,
+  pendingTestFile,
   onSelectSession,
   onDeleteSession,
   onRunHardcodedTest,
 }: SessionHistoryProps) {
   return (
-    <div className="flex h-full flex-col lg:border-l border-border bg-card">
+    <div className="flex h-full min-h-0 flex-col border-border bg-card lg:border-l">
       <div className="border-b border-border bg-gradient-to-r from-purple-50 to-pink-50 p-3 dark:from-purple-950 dark:to-pink-950 md:p-4">
         <h3 className="font-medium text-foreground">Sessions</h3>
         <p className="text-xs text-muted-foreground">{sessions.length} procesări</p>
       </div>
 
-      <ScrollArea className="flex-1">
+      <div className="min-h-0 flex-1 overflow-y-auto">
         <div className="space-y-2 p-3">
           {testFiles.length > 0 && (
             <>
@@ -41,10 +44,20 @@ export function SessionHistory({
                   key={filename}
                   type="button"
                   onClick={() => onRunHardcodedTest(filename)}
-                  className="w-full rounded-lg border border-amber-300 bg-gradient-to-r from-amber-50 to-orange-50 px-3 py-2 text-left text-sm font-medium text-amber-800 transition-colors hover:from-amber-100 hover:to-orange-100 dark:border-amber-700 dark:from-amber-950 dark:to-orange-950 dark:text-amber-300"
+                  disabled={pendingTestFile !== null}
+                  className={`w-full cursor-pointer rounded-lg border px-3 py-2 text-left text-sm font-medium transition-all focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-500 active:scale-[0.99] ${
+                    pendingTestFile === filename
+                      ? "border-amber-500 bg-gradient-to-r from-amber-100 to-orange-100 text-amber-900 dark:border-amber-500 dark:from-amber-900 dark:to-orange-900 dark:text-amber-200"
+                      : "border-amber-300 bg-gradient-to-r from-amber-50 to-orange-50 text-amber-800 hover:from-amber-100 hover:to-orange-100 dark:border-amber-700 dark:from-amber-950 dark:to-orange-950 dark:text-amber-300"
+                  } disabled:cursor-not-allowed disabled:opacity-70`}
+                  title={`Run ${filename}`}
                 >
                   <div className="flex items-center gap-2">
-                    <PlayCircle className="h-4 w-4" />
+                    {pendingTestFile === filename ? (
+                      <Loader2 className="h-4 w-4 animate-spin" />
+                    ) : (
+                      <PlayCircle className="h-4 w-4" />
+                    )}
                     <span className="truncate">{filename}</span>
                   </div>
                 </button>
@@ -56,21 +69,28 @@ export function SessionHistory({
           {sessions.map((session, index) => {
             const isActive = session.id === activeSessionId;
             const isRunning = session.status === "running";
+            const isPendingSelection = session.id === pendingSessionId;
 
             return (
               <motion.div
                 key={session.id}
                 initial={{ opacity: 0, x: 20 }}
                 animate={{ opacity: 1, x: 0 }}
-                transition={{ delay: index * 0.05 }}
+                transition={{ delay: Math.min(index * 0.02, 0.12) }}
                 className={`group relative cursor-pointer rounded-lg border p-3 shadow-sm transition-all hover:shadow-md ${
-                  isActive
+                  isPendingSelection
+                    ? "border-blue-500 bg-gradient-to-br from-blue-100 to-indigo-100 dark:border-blue-500 dark:from-blue-900 dark:to-indigo-900"
+                    : isActive
                     ? "border-blue-500 bg-gradient-to-br from-blue-50 to-indigo-50 dark:border-blue-600 dark:from-blue-950 dark:to-indigo-950"
                     : isRunning
                     ? "border-amber-500 bg-gradient-to-br from-amber-50 to-orange-50 dark:border-amber-600 dark:from-amber-950 dark:to-orange-950"
                     : "border-border bg-muted"
                 }`}
-                onClick={() => onSelectSession(session.id)}
+                onClick={() => {
+                  if (!isPendingSelection) {
+                    onSelectSession(session.id);
+                  }
+                }}
               >
                 {isRunning && (
                   <motion.div
@@ -87,11 +107,12 @@ export function SessionHistory({
                   <Button
                     variant="ghost"
                     size="sm"
-                    className="h-6 w-6 p-0 opacity-0 transition-opacity group-hover:opacity-100"
+                    className="h-6 w-6 p-0 opacity-100 transition-opacity md:opacity-0 md:group-hover:opacity-100"
                     onClick={(e) => {
                       e.stopPropagation();
                       onDeleteSession(session.id);
                     }}
+                    title="Delete session"
                   >
                     <Trash2 className="h-3 w-3" />
                   </Button>
@@ -101,6 +122,12 @@ export function SessionHistory({
                   <StatusBadge status={session.status} />
                   {session.status === "running" && (
                     <PlayCircle className="h-3 w-3 text-amber-600 dark:text-amber-400" />
+                  )}
+                  {isPendingSelection && (
+                    <span className="inline-flex items-center gap-1 text-[10px] font-medium text-blue-700 dark:text-blue-300">
+                      <Loader2 className="h-3 w-3 animate-spin" />
+                      Loading
+                    </span>
                   )}
                 </div>
 
@@ -118,7 +145,7 @@ export function SessionHistory({
             </div>
           )}
         </div>
-      </ScrollArea>
+      </div>
     </div>
   );
 }

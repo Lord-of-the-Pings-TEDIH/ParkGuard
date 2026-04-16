@@ -36,11 +36,7 @@ UTC = timezone.utc
 def _get_plate_reader() -> PlateReader:
     global _plate_reader
     if _plate_reader is None:
-        _plate_reader = PlateReader(
-            gpu=False,
-            use_angle_cls=settings.OCR_USE_ANGLE_CLS,
-            lang="en",
-        )
+        _plate_reader = PlateReader.from_settings()
     return _plate_reader
 
 
@@ -66,6 +62,28 @@ def _resolve_test_upload_file(filename: str) -> Path:
     if not _is_video_file(source):
         raise HTTPException(status_code=400, detail="Unsupported test file format")
     return source
+
+
+def _effective_fps_target(value: float | None) -> float:
+    if value is None or value <= 0:
+        return float(max(1, int(settings.FPS_TARGET)))
+    return float(max(1, int(round(value))))
+
+
+def _estimate_sampled_total_frames(video_info: dict, fps_target: float) -> int | None:
+    total_frames_raw = video_info.get("total_frames")
+    video_fps_raw = video_info.get("fps")
+    if not isinstance(total_frames_raw, (int, float)) or total_frames_raw <= 0:
+        return None
+    total_frames = int(total_frames_raw)
+
+    if not isinstance(video_fps_raw, (int, float)) or video_fps_raw <= 0:
+        video_fps = 25.0
+    else:
+        video_fps = float(video_fps_raw)
+
+    interval = max(1, round(video_fps / max(1.0, fps_target)))
+    return max(1, (total_frames + interval - 1) // interval)
 
 
 async def _run_processing_job(session_id: uuid.UUID) -> None:
@@ -109,10 +127,11 @@ async def create_session(
         content = await file.read()
         await out.write(content)
 
+    effective_fps_target = _effective_fps_target(fps_target)
     total_frames = None
     try:
         video_info = get_video_info(str(dest))
-        total_frames = video_info.get("total_frames")
+        total_frames = _estimate_sampled_total_frames(video_info, effective_fps_target)
     except Exception:
         pass
 
@@ -120,7 +139,7 @@ async def create_session(
         id=session_id,
         source_filename=filename,
         status="pending",
-        fps_target=fps_target,
+        fps_target=effective_fps_target,
         frames_processed=0,
         total_frames=total_frames,
     )
@@ -156,10 +175,11 @@ async def create_session_from_test_file(
     dest = Path(settings.UPLOAD_DIR) / f"{session_id}_{source.name}"
     shutil.copy2(source, dest)
 
+    effective_fps_target = _effective_fps_target(None)
     total_frames = None
     try:
         video_info = get_video_info(str(dest))
-        total_frames = video_info.get("total_frames")
+        total_frames = _estimate_sampled_total_frames(video_info, effective_fps_target)
     except Exception:
         pass
 
@@ -167,6 +187,7 @@ async def create_session_from_test_file(
         id=session_id,
         source_filename=source.name,
         status="pending",
+        fps_target=effective_fps_target,
         frames_processed=0,
         total_frames=total_frames,
     )

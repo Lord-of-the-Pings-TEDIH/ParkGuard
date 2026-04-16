@@ -1,8 +1,12 @@
 import os
+import re
 import uuid
 from datetime import datetime
+from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, computed_field
+
+_NON_ALNUM_RE = re.compile(r"[^A-Z0-9]")
 
 
 class PlateOut(BaseModel):
@@ -66,6 +70,35 @@ class DetectionOut(BaseModel):
             normalized = os.path.basename(raw_path)
 
         return f"/api/crops/{normalized}"
+
+    @computed_field  # type: ignore[prop-decorator]
+    @property
+    def voting_tag(self) -> Literal["final", "not_final"]:
+        """Return voting stage tag for this detection.
+
+        * ``not_final``: track is still active in voting (no ticket lookup yet)
+        * ``final``: track closed/disappeared and ticket status was resolved
+        """
+        return "final" if self.ticket_status is not None else "not_final"
+
+    @computed_field  # type: ignore[prop-decorator]
+    @property
+    def plate_annotation(self) -> str:
+        """Stable plate annotation key used for frontend deduplication."""
+        if self.ocr_normalized_text:
+            normalized = self.ocr_normalized_text.strip().upper()
+            if normalized and not normalized.startswith("INVALID:"):
+                compact = _NON_ALNUM_RE.sub("", normalized)
+                if compact:
+                    return compact
+
+        if self.ocr_raw_text:
+            raw = self.ocr_raw_text.strip().upper()
+            compact_raw = _NON_ALNUM_RE.sub("", raw)
+            if compact_raw:
+                return compact_raw
+
+        return str(self.id)
 
 
 class SessionOut(BaseModel):

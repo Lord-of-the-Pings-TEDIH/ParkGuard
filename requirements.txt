@@ -6,7 +6,10 @@ aiofiles==25.*
 python-multipart>=0.0.22
 pydantic-settings==2.3.*
 python-dotenv==1.0.*
-opencv-python-headless==4.9.*
+# opencv-contrib includes cv2.dnn_superres for AI super-resolution.
+# If upgrading an existing venv, first run:
+#   pip uninstall opencv-python-headless -y
+opencv-contrib-python-headless==4.9.*
 numpy<2
 ultralytics==8.3.*
 paddleocr==3.4.*

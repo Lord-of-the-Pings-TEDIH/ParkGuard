@@ -57,7 +57,7 @@ export function ProcessingView({ session, detections, onCancel, onComplete }: Pr
   };
 
   return (
-    <div className="flex h-full flex-col">
+    <div className="flex h-full min-h-0 flex-col">
       {/* Header with progress */}
       <div className="border-b border-border bg-card p-4 shadow-sm md:p-6">
         <div className="mb-4 flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
@@ -126,8 +126,8 @@ export function ProcessingView({ session, detections, onCancel, onComplete }: Pr
       </div>
 
       {/* Live detection feed */}
-      <div className="flex-1 overflow-y-auto bg-background p-4 md:p-6">
-        <div className="mb-4 flex items-center justify-between">
+      <div className="min-h-0 flex-1 overflow-y-auto bg-background p-4 md:p-6">
+        <div className="mb-4 flex flex-wrap items-center justify-between gap-2">
           <h3 className="font-medium text-foreground">
             Detections
           </h3>

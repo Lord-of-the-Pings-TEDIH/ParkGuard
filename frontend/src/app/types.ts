@@ -1,6 +1,7 @@
 export type SessionStatus = "pending" | "running" | "done" | "failed";
 export type TicketStatus = "active" | "subscription" | "grace" | "none" | "unknown";
 export type PlateType = "standard" | "temporary" | "diplomatic" | "unknown";
+export type VotingTag = "final" | "not_final";
 
 export interface Detection {
   id: string;
@@ -12,6 +13,9 @@ export interface Detection {
   ticket_status: TicketStatus;
   ticket_expires_at: string | null;
   created_at: string;
+  voting_tag: VotingTag;
+  plate_annotation: string;
+  occurrences: number;
 }
 
 export interface Session {

@@ -1,4 +1,4 @@
-import { useState, useCallback } from "react";
+import { useState, useCallback, useRef } from "react";
 import { Upload } from "lucide-react";
 import { Button } from "./ui/button";
 import { Label } from "./ui/label";
@@ -13,6 +13,7 @@ export function UploadZone({ onUpload, isProcessing }: UploadZoneProps) {
   const [isDragging, setIsDragging] = useState(false);
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const [fps, setFps] = useState([5]);
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
 
   const handleDragOver = useCallback((e: React.DragEvent) => {
     e.preventDefault();
@@ -47,6 +48,12 @@ export function UploadZone({ onUpload, isProcessing }: UploadZoneProps) {
     }
   };
 
+  const openFilePicker = () => {
+    if (!isProcessing) {
+      fileInputRef.current?.click();
+    }
+  };
+
   return (
     <div className="flex h-full flex-col items-center justify-center gap-6 p-4 md:gap-8 md:p-12">
       <div className="text-center">
@@ -59,14 +66,24 @@ export function UploadZone({ onUpload, isProcessing }: UploadZoneProps) {
       </div>
 
       <div
-        className={`relative w-full max-w-2xl rounded-lg border-2 border-dashed transition-all ${
+        className={`relative w-full max-w-2xl cursor-pointer rounded-lg border-2 border-dashed transition-all focus-within:ring-2 focus-within:ring-blue-500 ${
           isDragging
             ? "border-blue-500 bg-gradient-to-br from-blue-50 via-indigo-50 to-purple-50 dark:from-blue-950 dark:via-indigo-950 dark:to-purple-950"
-            : "border-border bg-card"
+            : "border-border bg-card hover:border-blue-400 hover:bg-blue-50/40 dark:hover:border-blue-700 dark:hover:bg-blue-950/30"
         }`}
         onDragOver={handleDragOver}
         onDragLeave={handleDragLeave}
         onDrop={handleDrop}
+        onClick={openFilePicker}
+        onKeyDown={(e) => {
+          if (e.key === "Enter" || e.key === " ") {
+            e.preventDefault();
+            openFilePicker();
+          }
+        }}
+        role="button"
+        tabIndex={isProcessing ? -1 : 0}
+        aria-label="Select video file for processing"
       >
         <div className="p-8 text-center md:p-12">
           <div className="mx-auto mb-4 flex h-12 w-12 items-center justify-center rounded-full bg-gradient-to-br from-blue-500 to-indigo-600 md:h-16 md:w-16">
@@ -80,7 +97,7 @@ export function UploadZone({ onUpload, isProcessing }: UploadZoneProps) {
           </p>
           <input
             type="file"
-            id="file-upload"
+            ref={fileInputRef}
             className="hidden"
             accept=".mp4,.avi,.mkv,video/mp4,video/x-msvideo,video/x-matroska"
             onChange={handleFileSelect}
@@ -88,7 +105,10 @@ export function UploadZone({ onUpload, isProcessing }: UploadZoneProps) {
           />
           <Button
             variant="outline"
-            onClick={() => document.getElementById("file-upload")?.click()}
+            onClick={(e) => {
+              e.stopPropagation();
+              openFilePicker();
+            }}
             disabled={isProcessing}
           >
             Browse Files

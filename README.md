@@ -36,6 +36,39 @@ Model/OCR defaults from `.env.example`:
 3. Read detections: `GET /api/sessions/{session_id}/detections`
 4. Read observed plates: `GET /api/plates`
 
+Each detection now includes a `voting_tag`:
+- `not_final` while track voting is still in progress
+- `final` once voting converges and ticket status is resolved
+
+Plate normalization uses color hints (`standard` / `temporary` / `diplomatic` / `probe` / `electric`).
+County-prefixed raw strings with **5-6 trailing digits** are treated as special numeric families
+(temporary-style), not coerced into standard 3-letter tails.
+Temporary county formats are constrained to **exactly 5 or 6 digits** (4-digit variants are rejected).
+Any plate normalized as `INVALID: ...` is excluded from voting.
+Detection payload also includes `plate_annotation`; frontend groups by this annotation
+and shows a single live card per plate (with `Seen: Nx`), preventing duplicates.
+Session `total_frames` now reflects sampled frames at `fps_target` (progress bar tracks
+actual processing workload, not raw source frame count).
+
+## Standalone pipeline flow debugger
+
+For step-by-step visualization (detect -> crop -> deskew -> OCR -> voting),
+use the standalone script (it does not import from `app/...`):
+
+```bash
+venv/bin/python pipeline_flow_debugger.py \
+  --video uploads/<your_video>.mp4 \
+  --model models/best.pt \
+  --out runs/pipeline_debug.mp4
+```
+
+Useful flags:
+- `--show-window` for live preview (if OpenCV has GUI support)
+- `--no-ocr` to inspect detection/tracking only
+- `--max-sampled-frames 100` for a short debug run
+- `--single-pass-ocr` to disable default multi-pass OCR preprocessing
+- `--skip-ocr-when-stable` to mimic production optimization (otherwise OCR runs on every sample)
+
 For hardcoded test videos already present in `uploads/`:
 
 - List available files: `GET /api/sessions/test-files`

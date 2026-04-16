@@ -36,6 +36,9 @@ export const MOCK_DETECTIONS: Detection[] = [
     ticket_status: "none",
     ticket_expires_at: null,
     created_at: new Date(Date.now() - 3500000).toISOString(),
+    voting_tag: "final",
+    plate_annotation: "B123ABC",
+    occurrences: 1,
   },
   {
     id: "2",
@@ -47,6 +50,9 @@ export const MOCK_DETECTIONS: Detection[] = [
     ticket_status: "active",
     ticket_expires_at: new Date(Date.now() + 3600000).toISOString(),
     created_at: new Date(Date.now() - 3400000).toISOString(),
+    voting_tag: "final",
+    plate_annotation: "CJ456DEF",
+    occurrences: 1,
   },
   {
     id: "3",
@@ -58,6 +64,9 @@ export const MOCK_DETECTIONS: Detection[] = [
     ticket_status: "none",
     ticket_expires_at: null,
     created_at: new Date(Date.now() - 3300000).toISOString(),
+    voting_tag: "final",
+    plate_annotation: "B789GHI",
+    occurrences: 1,
   },
   {
     id: "4",
@@ -69,6 +78,9 @@ export const MOCK_DETECTIONS: Detection[] = [
     ticket_status: "subscription",
     ticket_expires_at: new Date(Date.now() + 2592000000).toISOString(),
     created_at: new Date(Date.now() - 3200000).toISOString(),
+    voting_tag: "final",
+    plate_annotation: "B321XYZ",
+    occurrences: 1,
   },
   {
     id: "5",
@@ -80,6 +92,9 @@ export const MOCK_DETECTIONS: Detection[] = [
     ticket_status: "grace",
     ticket_expires_at: new Date(Date.now() + 900000).toISOString(),
     created_at: new Date(Date.now() - 3100000).toISOString(),
+    voting_tag: "final",
+    plate_annotation: "IF654MNO",
+    occurrences: 1,
   },
   {
     id: "6",
@@ -91,6 +106,9 @@ export const MOCK_DETECTIONS: Detection[] = [
     ticket_status: "none",
     ticket_expires_at: null,
     created_at: new Date(Date.now() - 3000000).toISOString(),
+    voting_tag: "final",
+    plate_annotation: "B555PQR",
+    occurrences: 1,
   },
 ];
 
@@ -181,5 +199,8 @@ export function generateMockDetection(sessionId: string, index: number): Detecti
       ? new Date(Date.now() + Math.random() * 86400000).toISOString()
       : null,
     created_at: new Date().toISOString(),
+    voting_tag: status !== "unknown" ? "final" : "not_final",
+    plate_annotation: plateText,
+    occurrences: 1,
   };
 }
