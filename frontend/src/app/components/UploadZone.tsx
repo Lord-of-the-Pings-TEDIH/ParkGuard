@@ -1,16 +1,15 @@
 import { useState, useCallback } from "react";
-import { Upload, PlayCircle } from "lucide-react";
+import { Upload } from "lucide-react";
 import { Button } from "./ui/button";
 import { Label } from "./ui/label";
 import { Slider } from "./ui/slider";
 
 interface UploadZoneProps {
   onUpload: (file: File, fps: number) => void;
-  onTestMode: () => void;
   isProcessing: boolean;
 }
 
-export function UploadZone({ onUpload, onTestMode, isProcessing }: UploadZoneProps) {
+export function UploadZone({ onUpload, isProcessing }: UploadZoneProps) {
   const [isDragging, setIsDragging] = useState(false);
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const [fps, setFps] = useState([5]);
@@ -122,22 +121,6 @@ export function UploadZone({ onUpload, onTestMode, isProcessing }: UploadZonePro
           </Button>
         </div>
       )}
-
-      <div className="flex items-center gap-4">
-        <div className="h-px w-24 bg-border" />
-        <span className="text-sm text-muted-foreground">or</span>
-        <div className="h-px w-24 bg-border" />
-      </div>
-
-      <Button
-        variant="outline"
-        onClick={onTestMode}
-        disabled={isProcessing}
-        className="border-amber-500 bg-gradient-to-r from-amber-50 to-orange-50 text-amber-700 hover:from-amber-100 hover:to-orange-100 dark:from-amber-950 dark:to-orange-950 dark:text-amber-400"
-      >
-        <PlayCircle className="mr-2 h-4 w-4" />
-        Demo Mode
-      </Button>
     </div>
   );
 }

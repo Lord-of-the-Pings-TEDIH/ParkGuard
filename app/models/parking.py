@@ -1,3 +1,4 @@
+import uuid
 from datetime import date, datetime
 
 from sqlalchemy import (
@@ -11,7 +12,7 @@ from sqlalchemy import (
     func,
 )
 
-from sqlalchemy.dialects.postgresql import JSONB
+from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.models.base import Base
@@ -102,8 +103,8 @@ class TicketCheck(Base):
     id: Mapped[int] = mapped_column(
         BigInteger, primary_key=True, autoincrement=True
     )
-    detection_id: Mapped[int] = mapped_column(
-        ForeignKey("detections.id"), nullable=False, index=True
+    detection_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("detections.id"), nullable=False, index=True
     )
     plate_text: Mapped[str] = mapped_column(String(20), nullable=False, index=True)
     checked_at: Mapped[datetime] = mapped_column(

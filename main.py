@@ -37,7 +37,8 @@ async def lifespan(app: FastAPI):
             await seed_db(session)
             
     except Exception as e:
-        print(f"Warning: Database initialization failed: {e}")
+        print(f"Database initialization failed: {e}")
+        raise
     yield
     # Teardown
     from app.core.database import async_engine

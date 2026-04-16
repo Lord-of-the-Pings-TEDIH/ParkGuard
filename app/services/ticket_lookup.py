@@ -1,3 +1,4 @@
+import uuid
 import re
 from datetime import datetime, time, timedelta, timezone
 
@@ -132,7 +133,7 @@ async def _check_grace_period(
 # ---------------------------------------------------------------------------
 
 async def write_ticket_check(
-    detection_id: int,
+    detection_id: uuid.UUID,
     plate_text: str,
     checked_at: datetime,
     status: str,
@@ -169,7 +170,7 @@ async def lookup_ticket(
     zone_id: int | None,
     checked_at: datetime,
     db: AsyncSession,
-    detection_id: int | None = None,
+    detection_id: uuid.UUID | None = None,
 ) -> tuple[str, datetime | None, int | None, int | None]:
     """Check whether *plate_text* has valid parking at *checked_at*.
 

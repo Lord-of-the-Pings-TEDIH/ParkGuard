@@ -9,11 +9,14 @@ import { PlateSearch } from "../components/PlateSearch";
 import { ThemeToggle } from "../components/ThemeToggle";
 import {
   createSession,
-  createTestSession,
+  createSessionFromHardcodedTest,
   getSession,
   getSessions,
   deleteSession,
+  cancelSession,
   getDetections,
+  getHardcodedTestFiles,
+  startSessionProcessing,
 } from "../services/api";
 import type { Session, Detection } from "../types";
 
@@ -24,13 +27,13 @@ export function Dashboard() {
   const [activeSession, setActiveSession] = useState<Session | null>(null);
   const [detections, setDetections] = useState<Detection[]>([]);
   const [sessions, setSessions] = useState<Session[]>([]);
-  const [isTestMode, setIsTestMode] = useState(false);
+  const [testFiles, setTestFiles] = useState<string[]>([]);
   const [error, setError] = useState<string | null>(null);
-  const [isMockMode, setIsMockMode] = useState(false);
 
   // Fetch all sessions on mount
   useEffect(() => {
     fetchSessions();
+    fetchTestFiles();
   }, []);
 
   // Polling for active session updates
@@ -69,13 +72,17 @@ export function Dashboard() {
     try {
       const allSessions = await getSessions();
       setSessions(allSessions);
-      // Check if we're in mock mode by checking if error message contains mock indication
-      if (allSessions.length > 0) {
-        setIsMockMode(true); // Assume mock mode if we got data without real API
-      }
     } catch (err) {
       console.error("Failed to fetch sessions:", err);
-      setIsMockMode(true);
+    }
+  };
+
+  const fetchTestFiles = async () => {
+    try {
+      const files = await getHardcodedTestFiles();
+      setTestFiles(files);
+    } catch (err) {
+      console.error("Failed to fetch test files:", err);
     }
   };
 
@@ -85,29 +92,33 @@ export function Dashboard() {
       const session = await createSession(file, fps);
       setActiveSession(session);
       setDetections([]);
-      setIsTestMode(false);
       setViewState("processing");
       await fetchSessions();
+      void startSessionProcessing(session.id).catch((err) => {
+        setError(err instanceof Error ? err.message : "Failed to start processing");
+      });
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to create session");
     }
   };
 
-  const handleTestMode = async () => {
+  const handleRunHardcodedTest = async (filename: string) => {
     try {
       setError(null);
-      const session = await createTestSession();
+      const session = await createSessionFromHardcodedTest(filename);
       setActiveSession(session);
       setDetections([]);
-      setIsTestMode(true);
       setViewState("processing");
       await fetchSessions();
+      void startSessionProcessing(session.id).catch((err) => {
+        setError(err instanceof Error ? err.message : "Failed to start processing");
+      });
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to create test session");
     }
   };
 
-  const handleSelectSession = async (id: number) => {
+  const handleSelectSession = async (id: string) => {
     try {
       const [session, sessionDetections] = await Promise.all([
         getSession(id),
@@ -116,12 +127,16 @@ export function Dashboard() {
 
       setActiveSession(session);
       setDetections(sessionDetections);
-      setIsTestMode(false);
 
       if (session.status === "running") {
         setViewState("processing");
       } else if (session.status === "done") {
         setViewState("results");
+      } else if (session.status === "pending" || session.status === "failed") {
+        setViewState("processing");
+        void startSessionProcessing(session.id).catch((err) => {
+          setError(err instanceof Error ? err.message : "Failed to start processing");
+        });
       }
     } catch (err) {
       console.error("Failed to load session:", err);
@@ -129,7 +144,7 @@ export function Dashboard() {
     }
   };
 
-  const handleDeleteSession = async (id: number) => {
+  const handleDeleteSession = async (id: string) => {
     try {
       await deleteSession(id);
       await fetchSessions();
@@ -139,12 +154,23 @@ export function Dashboard() {
       }
     } catch (err) {
       console.error("Failed to delete session:", err);
+      setError(err instanceof Error ? err.message : "Failed to delete session");
     }
   };
 
   const handleCancel = async () => {
-    if (activeSession) {
-      await handleDeleteSession(activeSession.id);
+    if (!activeSession) {
+      return;
+    }
+
+    try {
+      setError(null);
+      await cancelSession(activeSession.id);
+      await fetchSessions();
+      handleReset();
+    } catch (err) {
+      console.error("Failed to cancel session:", err);
+      setError(err instanceof Error ? err.message : "Failed to cancel session");
     }
   };
 
@@ -152,7 +178,6 @@ export function Dashboard() {
     setActiveSession(null);
     setDetections([]);
     setViewState("idle");
-    setIsTestMode(false);
     setError(null);
   };
 
@@ -163,26 +188,6 @@ export function Dashboard() {
   return (
     <div className="flex h-screen flex-col bg-background">
       <ThemeToggle />
-      {/* Demo/Mock mode banner */}
-      <AnimatePresence>
-        {(isTestMode || isMockMode) && (
-          <motion.div
-            initial={{ y: -100 }}
-            animate={{ y: 0 }}
-            exit={{ y: -100 }}
-            className="border-b border-amber-400 bg-gradient-to-r from-amber-50 to-orange-50 px-6 py-3 dark:border-amber-600 dark:from-amber-950 dark:to-orange-950"
-          >
-            <div className="flex items-center justify-center gap-2 text-amber-700 dark:text-amber-300">
-              <AlertCircle className="h-4 w-4" />
-              <span className="font-medium">
-                {isTestMode
-                  ? "Demo Mode"
-                  : "Development Mode"}
-              </span>
-            </div>
-          </motion.div>
-        )}
-      </AnimatePresence>
 
       {/* Error banner */}
       <AnimatePresence>
@@ -224,7 +229,6 @@ export function Dashboard() {
               >
                 <UploadZone
                   onUpload={handleUpload}
-                  onTestMode={handleTestMode}
                   isProcessing={false}
                 />
               </motion.div>
@@ -270,9 +274,11 @@ export function Dashboard() {
           <div className="h-64 lg:h-auto lg:w-80 border-t lg:border-t-0">
             <SessionHistory
               sessions={sessions}
+              testFiles={testFiles}
               activeSessionId={activeSession?.id || null}
               onSelectSession={handleSelectSession}
               onDeleteSession={handleDeleteSession}
+              onRunHardcodedTest={handleRunHardcodedTest}
             />
           </div>
 

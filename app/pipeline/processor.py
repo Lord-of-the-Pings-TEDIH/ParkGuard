@@ -174,6 +174,14 @@ def _best_ocr_candidate(
     return best_valid if best_valid.raw_text else best_any
 
 
+def _prefer_candidate(current: OCRCandidate, fallback: OCRCandidate) -> OCRCandidate:
+    if fallback.is_valid and not current.is_valid:
+        return fallback
+    if fallback.is_valid == current.is_valid and fallback.confidence > current.confidence:
+        return fallback
+    return current
+
+
 def _bbox_iou(
     box_a: tuple[int, int, int, int],
     box_b: tuple[int, int, int, int],
@@ -311,6 +319,11 @@ async def process_session(
         raise FileNotFoundError(f"Video not found: {video_path}")
 
     detector = PlateDetector(settings.MODEL_PATH, settings.DETECTION_CONF)
+    fps_target = (
+        max(1, int(round(session.fps_target)))
+        if session.fps_target is not None and session.fps_target > 0
+        else int(settings.FPS_TARGET)
+    )
 
     min_ocr_conf = max(0.0, min(1.0, float(settings.OCR_MIN_CONF)))
     ocr_angles = _parse_ocr_angles(settings.OCR_ANGLES)
@@ -318,136 +331,172 @@ async def process_session(
     track_max_age = max(1, int(settings.TRACK_MAX_AGE))
     track_min_iou = max(0.01, min(0.99, float(settings.TRACK_MIN_IOU)))
     min_track_votes = max(1, int(settings.MIN_TRACK_VOTES))
+    progress_commit_every = 10
+    session_crops_dir = Path(settings.CROPS_DIR) / str(session_id)
+    session_crops_dir.mkdir(parents=True, exist_ok=True)
 
     session.status = "processing"
-    session.fps_target = float(settings.FPS_TARGET)
-    await db.flush()
+    session.error_message = None
+    session.fps_target = float(fps_target)
+    session.frames_processed = 0
+    session.ended_at = None
+    await db.commit()
 
     frames_processed = 0
     active_tracks: dict[int, PlateTrack] = {}
     all_tracks: dict[int, PlateTrack] = {}
     next_track_id = 1
 
-    for frame_index, pts_ms, frame_img in extract_frames(
-        str(video_path), settings.FPS_TARGET
-    ):
-        frame = Frame(session_id=session_id, frame_index=frame_index, pts_ms=pts_ms)
-        db.add(frame)
-        await db.flush()
-
-        detections = detector.detect(frame_img, frame_index=frame_index)
-        for det in detections:
-            bbox_x, bbox_y, bbox_w, bbox_h = (
-                int(det["bbox"][0]),
-                int(det["bbox"][1]),
-                int(det["bbox"][2]),
-                int(det["bbox"][3]),
-            )
-            confidence = float(det["confidence"])
-            bbox = (bbox_x, bbox_y, bbox_w, bbox_h)
-
-            track, next_track_id = _assign_track(
-                bbox=bbox,
-                frame_index=frame_index,
-                active_tracks=active_tracks,
-                all_tracks=all_tracks,
-                next_track_id=next_track_id,
-                max_age=track_max_age,
-                min_iou=track_min_iou,
-            )
-
-            try:
-                crop = PlateDetector.crop_plate(frame_img, bbox, padding=0)
-            except ValueError:
-                continue
-
-            crop_filename = f"{frame.id}_{bbox_x}_{bbox_y}.jpg"
-            crop_path = Path(settings.CROPS_DIR) / crop_filename
-            cv2.imwrite(str(crop_path), crop)
-
-            candidate = OCRCandidate()
-            rectified = deskew_plate(crop)
-            if rectified.size == 0:
-                rectified = crop
-
-            sharpness = _sharpness_score(rectified)
-            if sharpness >= min_sharpness:
-                ocr_input = (
-                    _enhance_motion_blur(rectified)
-                    if sharpness < min_sharpness * 1.35
-                    else rectified
-                )
-                candidate = _best_ocr_candidate(
-                    recognize,
-                    ocr_input,
-                    ocr_angles=ocr_angles,
-                )
-
-                if (
-                    candidate.raw_text
-                    and candidate.confidence >= min_ocr_conf
-                    and candidate.is_valid
-                ):
-                    _register_track_vote(track, candidate.normalized, candidate.confidence)
-
-            best_plate, best_votes, _best_avg_conf, _stability = _track_best_plate(track)
-
-            raw_plate_text = candidate.raw_text or None
-            normalized_plate_text = candidate.normalized if candidate.raw_text else None
-            is_valid_ro_plate = (
-                bool(candidate.raw_text)
-                and candidate.is_valid
-                and candidate.confidence >= min_ocr_conf
-            )
-
-            if best_plate and best_votes >= min_track_votes:
-                normalized_plate_text = best_plate
-                is_valid_ro_plate = True
-
-            detection = Detection(
-                frame_id=frame.id,
-                bbox_x=bbox_x,
-                bbox_y=bbox_y,
-                bbox_w=bbox_w,
-                bbox_h=bbox_h,
-                detection_confidence=confidence,
-                crop_image_path=crop_filename,
-                ocr_raw_text=raw_plate_text,
-                ocr_normalized_text=normalized_plate_text,
-                is_valid_ro_plate=is_valid_ro_plate,
-            )
-            db.add(detection)
+    try:
+        for frame_index, pts_ms, frame_img in extract_frames(
+            str(video_path), fps_target
+        ):
+            frame = Frame(session_id=session_id, frame_index=frame_index, pts_ms=pts_ms)
+            db.add(frame)
             await db.flush()
 
-            if normalized_plate_text and is_valid_ro_plate:
-                compact_text = compact_plate(normalized_plate_text)
-                plate = await _get_or_create_plate(compact_text, db)
-                detection.plate_id = plate.id
-
-                status, expires_at, _tid, _sid = await lookup_ticket(
-                    plate_text=compact_text,
-                    zone_id=zone_id,
-                    checked_at=datetime.now(UTC),
-                    db=db,
-                    detection_id=detection.id,
+            detections = detector.detect(frame_img, frame_index=frame_index)
+            for det in detections:
+                bbox_x, bbox_y, bbox_w, bbox_h = (
+                    int(det["bbox"][0]),
+                    int(det["bbox"][1]),
+                    int(det["bbox"][2]),
+                    int(det["bbox"][3]),
                 )
-                detection.ticket_status = status
-                detection.ticket_expires_at = expires_at
+                confidence = float(det["confidence"])
+                bbox = (bbox_x, bbox_y, bbox_w, bbox_h)
+
+                track, next_track_id = _assign_track(
+                    bbox=bbox,
+                    frame_index=frame_index,
+                    active_tracks=active_tracks,
+                    all_tracks=all_tracks,
+                    next_track_id=next_track_id,
+                    max_age=track_max_age,
+                    min_iou=track_min_iou,
+                )
+                pre_plate, pre_votes, _pre_avg_conf, _pre_stability = _track_best_plate(track)
+                track_already_stable = bool(pre_plate and pre_votes >= min_track_votes)
+
+                try:
+                    crop = PlateDetector.crop_plate(frame_img, bbox, padding=4)
+                except ValueError:
+                    continue
+
+                crop_filename = f"{frame.id}_{bbox_x}_{bbox_y}.jpg"
+                crop_relative_path = Path(str(session_id)) / crop_filename
+                crop_path = session_crops_dir / crop_filename
+                cv2.imwrite(str(crop_path), crop)
+
+                candidate = OCRCandidate()
+                if not track_already_stable:
+                    rectified = deskew_plate(crop)
+                    if rectified.size == 0:
+                        rectified = crop
+
+                    sharpness = _sharpness_score(rectified)
+                    if sharpness >= min_sharpness:
+                        ocr_input = (
+                            _enhance_motion_blur(rectified)
+                            if sharpness < min_sharpness * 1.35
+                            else rectified
+                        )
+                        candidate = _best_ocr_candidate(
+                            recognize,
+                            ocr_input,
+                            ocr_angles=ocr_angles,
+                        )
+                    else:
+                        candidate = _best_ocr_candidate(
+                            recognize,
+                            crop,
+                            ocr_angles=ocr_angles,
+                        )
+
+                    if not candidate.raw_text:
+                        fallback_candidate = _best_ocr_candidate(
+                            recognize,
+                            crop,
+                            ocr_angles=ocr_angles,
+                        )
+                        candidate = _prefer_candidate(candidate, fallback_candidate)
+
+                    if (
+                        candidate.raw_text
+                        and candidate.confidence >= min_ocr_conf
+                        and candidate.is_valid
+                    ):
+                        _register_track_vote(track, candidate.normalized, candidate.confidence)
+
+                best_plate, best_votes, _best_avg_conf, _stability = _track_best_plate(track)
+
+                raw_plate_text = candidate.raw_text or None
+                normalized_plate_text = candidate.normalized if candidate.raw_text else None
+                is_valid_ro_plate = (
+                    bool(candidate.raw_text)
+                    and candidate.is_valid
+                    and candidate.confidence >= min_ocr_conf
+                )
+
+                if best_plate and best_votes >= min_track_votes:
+                    normalized_plate_text = best_plate
+                    is_valid_ro_plate = True
+
+                detection = Detection(
+                    frame_id=frame.id,
+                    bbox_x=bbox_x,
+                    bbox_y=bbox_y,
+                    bbox_w=bbox_w,
+                    bbox_h=bbox_h,
+                    detection_confidence=confidence,
+                    crop_image_path=crop_relative_path.as_posix(),
+                    ocr_raw_text=raw_plate_text,
+                    ocr_normalized_text=normalized_plate_text,
+                    is_valid_ro_plate=is_valid_ro_plate,
+                )
+                db.add(detection)
                 await db.flush()
 
-        frames_processed += 1
+                if normalized_plate_text and is_valid_ro_plate:
+                    compact_text = compact_plate(normalized_plate_text)
+                    plate = await _get_or_create_plate(compact_text, db)
+                    detection.plate_id = plate.id
 
-    session.frames_processed = frames_processed
-    session.status = "completed"
-    session.ended_at = datetime.now(UTC)
-    await db.commit()
+                    status, expires_at, _tid, _sid = await lookup_ticket(
+                        plate_text=compact_text,
+                        zone_id=zone_id,
+                        checked_at=datetime.now(UTC),
+                        db=db,
+                        detection_id=detection.id,
+                    )
+                    detection.ticket_status = status
+                    detection.ticket_expires_at = expires_at
+                    await db.flush()
 
-    finalized_tracks = sum(
-        1 for track in all_tracks.values() if _track_best_plate(track)[1] >= min_track_votes
-    )
-    logger.info(
-        "Session %s completed — %d frames processed, %d stable tracks",
-        session_id,
-        frames_processed,
-        finalized_tracks,
-    )
+            frames_processed += 1
+            session.frames_processed = frames_processed
+            if frames_processed % progress_commit_every == 0:
+                await db.commit()
+
+        session.frames_processed = frames_processed
+        session.status = "completed"
+        session.ended_at = datetime.now(UTC)
+        await db.commit()
+
+        finalized_tracks = sum(
+            1 for track in all_tracks.values() if _track_best_plate(track)[1] >= min_track_votes
+        )
+        logger.info(
+            "Session %s completed — %d frames processed, %d stable tracks",
+            session_id,
+            frames_processed,
+            finalized_tracks,
+        )
+    except Exception as exc:
+        session.frames_processed = frames_processed
+        session.status = "failed"
+        session.error_message = str(exc)
+        session.ended_at = datetime.now(UTC)
+        await db.commit()
+        logger.exception("Session %s failed during processing", session_id)
+        raise

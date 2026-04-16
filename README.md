@@ -36,6 +36,11 @@ Model/OCR defaults from `.env.example`:
 3. Read detections: `GET /api/sessions/{session_id}/detections`
 4. Read observed plates: `GET /api/plates`
 
+For hardcoded test videos already present in `uploads/`:
+
+- List available files: `GET /api/sessions/test-files`
+- Create a session from one test file: `POST /api/sessions/test-files/{filename}`
+
 ## Tests
 
 ```bash
