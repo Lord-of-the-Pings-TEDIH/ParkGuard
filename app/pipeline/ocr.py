@@ -156,10 +156,24 @@ class PlateReader:
             else processed
         )
 
-        if hasattr(self.reader, "predict"):
+        result: Any | None = None
+        if hasattr(self.reader, "ocr"):
+            try:
+                result = self.reader.ocr(ocr_input, det=False, rec=True, cls=False)
+            except TypeError as exc:
+                message = str(exc)
+                unsupported_kw = "unexpected keyword argument" in message and (
+                    "'det'" in message or "'rec'" in message or "'cls'" in message
+                )
+                if not unsupported_kw:
+                    raise
+                result = self.reader.ocr(ocr_input)
+
+        if result is None and hasattr(self.reader, "predict"):
             result = self.reader.predict(ocr_input)
-        else:
-            result = self.reader.ocr(ocr_input, det=False, rec=True, cls=False)
+
+        if result is None:
+            raise RuntimeError("PaddleOCR reader has no supported OCR method")
 
         tokens: list[tuple[str, float]] = []
         _collect_ocr_tokens(result, tokens)

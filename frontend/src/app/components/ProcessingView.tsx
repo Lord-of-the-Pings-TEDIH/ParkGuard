@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { motion } from "motion/react";
 import { XCircle, CheckCircle, AlertCircle } from "lucide-react";
 import { Button } from "./ui/button";
@@ -16,6 +16,14 @@ interface ProcessingViewProps {
 
 export function ProcessingView({ session, detections, onCancel, onComplete }: ProcessingViewProps) {
   const [elapsed, setElapsed] = useState(0);
+  const uniqueLiveDetections = useMemo(() => {
+    const validOnly = detections.filter(
+      (detection) =>
+        detection.is_valid_ro_plate &&
+        !detection.ocr_normalized_text.toUpperCase().startsWith("INVALID:")
+    );
+    return dedupeLiveDetections(validOnly);
+  }, [detections]);
 
   useEffect(() => {
     const interval = setInterval(() => {
@@ -35,7 +43,7 @@ export function ProcessingView({ session, detections, onCancel, onComplete }: Pr
     ? (session.frames_processed / session.frames_total) * 100
     : 0;
 
-  const stats = calculateStats(detections);
+  const stats = calculateStats(uniqueLiveDetections);
 
   const getStatusIcon = () => {
     switch (session.status) {
@@ -135,13 +143,13 @@ export function ProcessingView({ session, detections, onCancel, onComplete }: Pr
           )}
         </div>
 
-        {detections.length === 0 ? (
+        {uniqueLiveDetections.length === 0 ? (
           <div className="flex h-64 items-center justify-center text-slate-500">
-            Waiting for detections...
+            Waiting for valid detections...
           </div>
         ) : (
           <div className="space-y-3">
-            {detections.map((detection, index) => (
+            {uniqueLiveDetections.map((detection, index) => (
               <DetectionCard
                 key={detection.id}
                 detection={detection}
@@ -152,5 +160,172 @@ export function ProcessingView({ session, detections, onCancel, onComplete }: Pr
         )}
       </div>
     </div>
+  );
+}
+
+function dedupeLiveDetections(detections: Detection[]): Detection[] {
+  const groups = new Map<string, GroupAggregate>();
+  const sorted = [...detections].sort(
+    (a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
+  );
+
+  for (const detection of sorted) {
+    const parsed = parsePlateLike(detection.ocr_normalized_text) ?? parsePlateLike(detection.ocr_raw_text);
+    const groupKey = parsed ? `plate:${parsed.anchor}` : `id:${detection.id}`;
+    const variantKey = parsed ? parsed.compact : compactText(detection.ocr_normalized_text || detection.ocr_raw_text) || detection.id;
+
+    const aggregate = groups.get(groupKey) ?? { variants: new Map() };
+    const current = aggregate.variants.get(variantKey);
+    const score = variantScore(detection);
+
+    if (!current) {
+      aggregate.variants.set(variantKey, {
+        count: 1,
+        bestDetection: detection,
+        bestScore: score,
+      });
+      groups.set(groupKey, aggregate);
+      continue;
+    }
+
+    current.count += 1;
+    if (score > current.bestScore) {
+      current.bestScore = score;
+      current.bestDetection = detection;
+    }
+  }
+
+  const deduped: Detection[] = [];
+  for (const group of groups.values()) {
+    const variants = Array.from(group.variants.values());
+    variants.sort((a, b) => {
+      if (b.count !== a.count) return b.count - a.count;
+      if (b.bestDetection.is_valid_ro_plate !== a.bestDetection.is_valid_ro_plate) {
+        return b.bestDetection.is_valid_ro_plate ? 1 : -1;
+      }
+      if (b.bestDetection.detection_confidence !== a.bestDetection.detection_confidence) {
+        return b.bestDetection.detection_confidence - a.bestDetection.detection_confidence;
+      }
+      return new Date(b.bestDetection.created_at).getTime() - new Date(a.bestDetection.created_at).getTime();
+    });
+    deduped.push(variants[0].bestDetection);
+  }
+
+  return deduped.sort(
+    (a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
+  );
+}
+
+type ParsedPlate = {
+  compact: string;
+  anchor: string;
+};
+
+type GroupVariant = {
+  count: number;
+  bestDetection: Detection;
+  bestScore: number;
+};
+
+type GroupAggregate = {
+  variants: Map<string, GroupVariant>;
+};
+
+const DIGIT_TO_LETTER: Record<string, string> = {
+  "0": "O",
+  "1": "I",
+  "2": "Z",
+  "3": "B",
+  "4": "A",
+  "5": "S",
+  "6": "G",
+  "7": "T",
+  "8": "B",
+  "9": "P",
+};
+
+const LETTER_TO_DIGIT: Record<string, string> = {
+  O: "0",
+  Q: "0",
+  I: "1",
+  Z: "2",
+  S: "5",
+  G: "6",
+  T: "7",
+  B: "8",
+  A: "4",
+};
+
+function compactText(text: string): string {
+  return text.toUpperCase().replace(/[^A-Z0-9]/g, "");
+}
+
+function normalizeLetters(text: string): string {
+  return text
+    .split("")
+    .map((char) => DIGIT_TO_LETTER[char] ?? char)
+    .join("");
+}
+
+function normalizeDigits(text: string): string {
+  return text
+    .split("")
+    .map((char) => LETTER_TO_DIGIT[char] ?? char)
+    .join("");
+}
+
+function parsePlateLike(rawText: string): ParsedPlate | null {
+  const clean = compactText(rawText || "");
+  if (!clean) return null;
+
+  if (clean.startsWith("B") || clean.startsWith("8")) {
+    const body = clean.slice(1);
+    const temporaryDigits = normalizeDigits(body);
+    if (/^\d{3,}$/.test(temporaryDigits)) {
+      return { compact: `B${temporaryDigits}`, anchor: `B${temporaryDigits}` };
+    }
+    if (body.length < 5) return null;
+
+    const standardDigits = normalizeDigits(body.slice(0, -3));
+    const standardLetters = normalizeLetters(body.slice(-3));
+    if (!/^\d{2,3}$/.test(standardDigits) || !/^[A-Z]{3}$/.test(standardLetters)) {
+      return null;
+    }
+    return {
+      compact: `B${standardDigits}${standardLetters}`,
+      anchor: `B${standardDigits}`,
+    };
+  }
+
+  if (clean.length < 4) return null;
+  const county = normalizeLetters(clean.slice(0, 2));
+  if (!/^[A-Z]{2}$/.test(county)) {
+    return null;
+  }
+
+  const body = clean.slice(2);
+  const temporaryDigits = normalizeDigits(body);
+  if (/^\d{3,}$/.test(temporaryDigits)) {
+    return { compact: `${county}${temporaryDigits}`, anchor: `${county}${temporaryDigits}` };
+  }
+
+  if (body.length < 5) return null;
+  const standardDigits = normalizeDigits(body.slice(0, 2));
+  const standardLetters = normalizeLetters(body.slice(-3));
+  if (!/^\d{2}$/.test(standardDigits) || !/^[A-Z]{3}$/.test(standardLetters)) {
+    return null;
+  }
+
+  return {
+    compact: `${county}${standardDigits}${standardLetters}`,
+    anchor: `${county}${standardDigits}`,
+  };
+}
+
+function variantScore(detection: Detection): number {
+  return (
+    detection.detection_confidence +
+    (detection.is_valid_ro_plate ? 1 : 0) +
+    (detection.ticket_status !== "unknown" ? 0.2 : 0)
   );
 }

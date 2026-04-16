@@ -45,17 +45,27 @@ class DetectionOut(BaseModel):
     @computed_field  # type: ignore[prop-decorator]
     @property
     def crop_image_url(self) -> str | None:
-        """Return a fully-rooted URL for the crop image (e.g. /crops/abc.jpg).
+        """Return a fully-rooted URL for the crop image.
 
         Handles three possible storage formats for crop_image_path:
           - None            → None
-          - "abc.jpg"       → "/crops/abc.jpg"
-          - "crops/abc.jpg" → "/crops/abc.jpg"
+          - "abc.jpg"       → "/api/crops/abc.jpg"
+          - "crops/abc.jpg" → "/api/crops/abc.jpg"
+          - "sid/abc.jpg"   → "/api/crops/sid/abc.jpg"
         """
         if self.crop_image_path is None:
             return None
-        filename = os.path.basename(self.crop_image_path)
-        return f"/api/crops/{filename}"
+        raw_path = self.crop_image_path.strip().replace("\\", "/")
+        if not raw_path:
+            return None
+        if raw_path.startswith("crops/"):
+            raw_path = raw_path[len("crops/") :]
+
+        normalized = os.path.normpath(raw_path).replace("\\", "/")
+        if normalized.startswith("../") or normalized == ".." or normalized.startswith("/"):
+            normalized = os.path.basename(raw_path)
+
+        return f"/api/crops/{normalized}"
 
 
 class SessionOut(BaseModel):

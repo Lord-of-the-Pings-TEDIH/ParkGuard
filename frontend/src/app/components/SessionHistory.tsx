@@ -7,26 +7,52 @@ import type { Session } from "../types";
 
 interface SessionHistoryProps {
   sessions: Session[];
-  activeSessionId: number | null;
-  onSelectSession: (id: number) => void;
-  onDeleteSession: (id: number) => void;
+  testFiles: string[];
+  activeSessionId: string | null;
+  onSelectSession: (id: string) => void;
+  onDeleteSession: (id: string) => void;
+  onRunHardcodedTest: (filename: string) => void;
 }
 
 export function SessionHistory({
   sessions,
+  testFiles,
   activeSessionId,
   onSelectSession,
   onDeleteSession,
+  onRunHardcodedTest,
 }: SessionHistoryProps) {
   return (
     <div className="flex h-full flex-col lg:border-l border-border bg-card">
       <div className="border-b border-border bg-gradient-to-r from-purple-50 to-pink-50 p-3 dark:from-purple-950 dark:to-pink-950 md:p-4">
         <h3 className="font-medium text-foreground">Sessions</h3>
-        <p className="text-xs text-muted-foreground">{sessions.length}</p>
+        <p className="text-xs text-muted-foreground">{sessions.length} procesări</p>
       </div>
 
       <ScrollArea className="flex-1">
         <div className="space-y-2 p-3">
+          {testFiles.length > 0 && (
+            <>
+              <div className="mb-2 text-xs font-medium uppercase tracking-wide text-muted-foreground">
+                Uploads hardcodate
+              </div>
+              {testFiles.map((filename) => (
+                <button
+                  key={filename}
+                  type="button"
+                  onClick={() => onRunHardcodedTest(filename)}
+                  className="w-full rounded-lg border border-amber-300 bg-gradient-to-r from-amber-50 to-orange-50 px-3 py-2 text-left text-sm font-medium text-amber-800 transition-colors hover:from-amber-100 hover:to-orange-100 dark:border-amber-700 dark:from-amber-950 dark:to-orange-950 dark:text-amber-300"
+                >
+                  <div className="flex items-center gap-2">
+                    <PlayCircle className="h-4 w-4" />
+                    <span className="truncate">{filename}</span>
+                  </div>
+                </button>
+              ))}
+              <div className="my-3 h-px bg-border" />
+            </>
+          )}
+
           {sessions.map((session, index) => {
             const isActive = session.id === activeSessionId;
             const isRunning = session.status === "running";
