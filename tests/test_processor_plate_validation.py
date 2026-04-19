@@ -79,6 +79,14 @@ class FakeDetectorNoHits(FakeDetector):
         return []
 
 
+class FakeDetectorSplitTracks(FakeDetector):
+    def detect(self, frame: np.ndarray, frame_index: int = 0) -> list[dict]:
+        _ = frame
+        if frame_index < 2:
+            return [{"bbox": (1, 1, 4, 2), "confidence": 0.93}]
+        return [{"bbox": (30, 1, 4, 2), "confidence": 0.93}]
+
+
 def _single_frame(*_args, **_kwargs) -> list[tuple[int, int, np.ndarray]]:
     frame = np.zeros((24, 48, 3), dtype=np.uint8)
     frame[:, ::2] = 255
@@ -126,6 +134,16 @@ def _configure_processor(
     monkeypatch.setattr(processor, "PlateDetector", detector_cls)
     monkeypatch.setattr(processor, "extract_frames", extract_frames_fn)
     monkeypatch.setattr(processor, "lookup_ticket", lookup_mock)
+
+
+def test_find_near_match_prefers_stronger_existing_variant() -> None:
+    track = processor.PlateTrack(track_id=1, bbox=(0, 0, 10, 4), last_frame=0)
+    track.votes.update({"CJ05XYP": 1, "CJ05XYO": 3})
+    track.conf_sums["CJ05XYP"] = 0.62
+    track.conf_sums["CJ05XYO"] = 2.55
+
+    match = processor._find_near_match(track, "CJ05XYQ")
+    assert match == "CJ05XYO"
 
 
 @pytest.mark.asyncio
@@ -376,6 +394,56 @@ async def test_invalid_normalized_candidate_is_ignored_in_voting(
     assert DetectionOut.model_validate(detections[1]).voting_tag == "not_final"
     assert DetectionOut.model_validate(detections[0]).plate_annotation == "CJ05XYO"
     assert DetectionOut.model_validate(detections[1]).plate_annotation == "GARBAGE"
+
+
+@pytest.mark.asyncio
+async def test_sparse_split_track_reuses_strong_canonical_plate(
+    db: AsyncSession,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    uploads_dir = tmp_path / "uploads"
+    crops_dir = tmp_path / "crops"
+    uploads_dir.mkdir()
+    crops_dir.mkdir()
+
+    lookup_mock = AsyncMock(return_value=("active", None, 123, None))
+    _configure_processor(
+        monkeypatch,
+        uploads_dir,
+        crops_dir,
+        lookup_mock,
+        min_track_votes=2,
+        extract_frames_fn=_three_frames,
+        detector_cls=FakeDetectorSplitTracks,
+    )
+
+    session_obj = await _create_session_and_video(db, uploads_dir)
+    ocr_outputs = iter([("CJ05XY0", 0.99), ("CJ05XY0", 0.97), ("CJ05XYP", 0.96)])
+
+    await processor.process_session(
+        session_obj.id,
+        db,
+        ocr=lambda _crop: next(ocr_outputs),
+        zone_id=1,
+    )
+
+    detections = (
+        await db.execute(
+            select(Detection)
+            .join(Frame, Detection.frame_id == Frame.id)
+            .where(Frame.session_id == session_obj.id)
+            .order_by(Frame.frame_index.asc())
+        )
+    ).scalars().all()
+
+    assert len(detections) == 3
+    # Split sparse track OCR variant is canonicalized to the stronger plate.
+    assert detections[2].ocr_normalized_text == "CJ 05 XYO"
+    assert detections[2].ticket_status == "active"
+
+    lookup_plates = [call.kwargs["plate_text"] for call in lookup_mock.await_args_list]
+    assert lookup_plates == ["CJ05XYO", "CJ05XYO"]
 
 
 @pytest.mark.asyncio
