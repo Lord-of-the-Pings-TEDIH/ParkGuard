@@ -296,14 +296,42 @@ def _levenshtein_distance(a: str, b: str) -> int:
 def _find_near_match(track: PlateTrack, plate: str) -> str | None:
     """Return the existing vote key within Levenshtein distance ≤1, if any.
 
-    Prefers the variant with more accumulated votes; ties broken by the
-    new *plate* matching an existing key exactly (identity is distance 0).
+    Prefers the variant with more accumulated votes, then by average OCR
+    confidence, then by lexical order for deterministic tie-breaking.
     """
     if plate in track.votes:
         return plate
-    for existing in track.votes:
-        if len(existing) == len(plate) and _levenshtein_distance(existing, plate) <= 1:
-            return existing
+
+    candidates: list[tuple[int, float, str]] = []
+    for existing, votes in track.votes.items():
+        if len(existing) != len(plate):
+            continue
+        if _levenshtein_distance(existing, plate) > 1:
+            continue
+        avg_conf = track.conf_sums.get(existing, 0.0) / max(1, votes)
+        candidates.append((votes, avg_conf, existing))
+
+    if candidates:
+        return max(candidates)[2]
+    return None
+
+
+def _find_registry_near_match(
+    finalized_registry: dict[str, tuple[int, float]], plate: str
+) -> str | None:
+    if plate in finalized_registry:
+        return plate
+
+    candidates: list[tuple[int, float, str]] = []
+    for existing, (votes, avg_conf) in finalized_registry.items():
+        if len(existing) != len(plate):
+            continue
+        if _levenshtein_distance(existing, plate) > 1:
+            continue
+        candidates.append((votes, avg_conf, existing))
+
+    if candidates:
+        return max(candidates)[2]
     return None
 
 
@@ -383,6 +411,7 @@ async def _finalize_track_with_fallback(
     db: AsyncSession,
     zone_id: int | None,
     min_track_votes: int,
+    finalized_registry: dict[str, tuple[int, float]],
 ) -> None:
     """Finalize unresolved tracks with the best-confidence valid plate.
 
@@ -401,6 +430,12 @@ async def _finalize_track_with_fallback(
 
     if not chosen_plate:
         return
+
+    is_stable_choice = bool(best_plate and best_votes >= min_track_votes and chosen_plate == best_plate)
+    if not is_stable_choice:
+        near_canonical = _find_registry_near_match(finalized_registry, chosen_plate)
+        if near_canonical is not None:
+            chosen_plate = near_canonical
 
     normalized = normalize_plate(chosen_plate)
     if is_invalid_plate(normalized):
@@ -438,6 +473,16 @@ async def _finalize_track_with_fallback(
     detection.ticket_expires_at = expires_at
     await db.flush()
     track.finalized = True
+
+    evidence_votes = best_votes if is_stable_choice else max(1, best_votes)
+    evidence_avg_conf = (
+        track.conf_sums.get(best_plate, 0.0) / max(1, best_votes)
+        if best_plate and best_votes > 0
+        else track.best_confidence
+    )
+    current = finalized_registry.get(normalized)
+    if current is None or (evidence_votes, evidence_avg_conf) > current:
+        finalized_registry[normalized] = (evidence_votes, evidence_avg_conf)
 
 
 async def process_session(
@@ -498,6 +543,7 @@ async def process_session(
     frames_processed = 0
     active_tracks: dict[int, PlateTrack] = {}
     all_tracks: dict[int, PlateTrack] = {}
+    finalized_plate_registry: dict[str, tuple[int, float]] = {}
     next_track_id = 1
 
     try:
@@ -515,6 +561,7 @@ async def process_session(
                     db=db,
                     zone_id=zone_id,
                     min_track_votes=min_track_votes,
+                    finalized_registry=finalized_plate_registry,
                 )
 
             detections = detector.detect(frame_img, frame_index=frame_index)
@@ -651,6 +698,7 @@ async def process_session(
                 db=db,
                 zone_id=zone_id,
                 min_track_votes=min_track_votes,
+                finalized_registry=finalized_plate_registry,
             )
 
         session.frames_processed = frames_processed
