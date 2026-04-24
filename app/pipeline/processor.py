@@ -56,6 +56,7 @@ class PlateTrack:
     best_confidence: float = 0.0
     best_conf_detection_id: uuid.UUID | None = None
     last_detection_id: uuid.UUID | None = None
+    detection_ids: list[uuid.UUID] = field(default_factory=list)
     finalized: bool = False
 
 
@@ -415,13 +416,16 @@ async def _finalize_track_with_fallback(
 ) -> None:
     """Finalize unresolved tracks with the best-confidence valid plate.
 
-    If a track never reached ``min_track_votes`` before disappearing, fallback
-    to the highest-confidence valid candidate observed in that track.
+    Every detection in the track is relabelled with the chosen canonical plate
+    so the frontend groups them as a single card.  Near-matches against
+    already-finalized plates (Levenshtein ≤1) collapse onto the existing
+    canonical — this prevents split finals like ``SJ03FAL`` / ``SJ03FAU`` for
+    the same physical vehicle when OCR disagrees slightly between tracks.
     """
     if track.finalized:
         return
 
-    best_plate, best_votes, _best_avg_conf, _stability = _track_best_plate(track)
+    best_plate, best_votes, best_avg_conf, _stability = _track_best_plate(track)
     chosen_plate: str | None = None
     if best_plate and best_votes >= min_track_votes:
         chosen_plate = best_plate
@@ -432,45 +436,56 @@ async def _finalize_track_with_fallback(
         return
 
     is_stable_choice = bool(best_plate and best_votes >= min_track_votes and chosen_plate == best_plate)
-    if not is_stable_choice:
-        near_canonical = _find_registry_near_match(finalized_registry, chosen_plate)
-        if near_canonical is not None:
-            chosen_plate = near_canonical
+    # Always consult the cross-track registry so stable-vote finalizations
+    # also collapse onto earlier near-match canonicals.  Without this, two
+    # tracks of the same car can each reach MIN_TRACK_VOTES with slightly
+    # different OCR reads and produce duplicate cards in the UI.
+    near_canonical = _find_registry_near_match(finalized_registry, chosen_plate)
+    if near_canonical is not None and near_canonical != chosen_plate:
+        chosen_plate = near_canonical
 
     normalized = normalize_plate(chosen_plate)
     if is_invalid_plate(normalized):
         return
 
-    if chosen_plate == track.best_conf_plate:
-        detection_id = track.best_conf_detection_id or track.last_detection_id
-    else:
-        detection_id = track.last_detection_id
-    if detection_id is None:
+    representative_id = (
+        track.best_conf_detection_id
+        if chosen_plate == track.best_conf_plate
+        else track.last_detection_id
+    ) or track.last_detection_id
+    if representative_id is None:
         return
 
-    detection = await db.get(Detection, detection_id)
-    if detection is None:
+    representative = await db.get(Detection, representative_id)
+    if representative is None:
         return
-    if detection.ticket_status is not None:
+    if representative.ticket_status is not None:
         track.finalized = True
         return
 
-    detection.ocr_normalized_text = normalized
-    detection.is_valid_ro_plate = True
-
     compact_text = compact_plate(normalized)
     plate = await _get_or_create_plate(compact_text, db)
-    detection.plate_id = plate.id
 
     status, expires_at, _tid, _sid = await lookup_ticket(
         plate_text=compact_text,
         zone_id=zone_id,
         checked_at=datetime.now(UTC),
         db=db,
-        detection_id=detection.id,
+        detection_id=representative.id,
     )
-    detection.ticket_status = status
-    detection.ticket_expires_at = expires_at
+
+    # Relabel every detection in the track.  ocr_raw_text is preserved so the
+    # per-frame OCR remains visible; only the normalized view collapses.
+    for detection_id in track.detection_ids:
+        detection = await db.get(Detection, detection_id)
+        if detection is None or detection.ticket_status is not None:
+            continue
+        detection.ocr_normalized_text = normalized
+        detection.is_valid_ro_plate = True
+        detection.plate_id = plate.id
+        detection.ticket_status = status
+        detection.ticket_expires_at = expires_at
+
     await db.flush()
     track.finalized = True
 
@@ -676,6 +691,7 @@ async def process_session(
                 db.add(detection)
                 await db.flush()
                 track.last_detection_id = detection.id
+                track.detection_ids.append(detection.id)
 
                 if (
                     candidate.raw_text

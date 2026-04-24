@@ -379,21 +379,25 @@ async def test_invalid_normalized_candidate_is_ignored_in_voting(
     ).scalars().all()
 
     assert len(detections) == 2
-    assert detections[0].ocr_normalized_text == "CJ 05 XYO"
-    assert detections[1].ocr_normalized_text == "INVALID: județ invalid"
+    # Raw text is preserved per frame (including the garbage read).
+    assert detections[0].ocr_raw_text == "CJ05XY0"
+    assert detections[1].ocr_raw_text == "GARBAGE"
 
-    # Second sample is invalid and must not increase vote count to final.
-    # Track finalization fallback should still use the best valid sample.
+    # Invalid candidates do not vote, but once the track finalizes every
+    # detection in it is relabelled with the track's canonical plate so the
+    # frontend groups them under one card.
+    assert detections[0].ocr_normalized_text == "CJ 05 XYO"
+    assert detections[1].ocr_normalized_text == "CJ 05 XYO"
     assert detections[0].ticket_status == "active"
-    assert detections[1].ticket_status is None
+    assert detections[1].ticket_status == "active"
     assert detections[0].plate_id is not None
-    assert detections[1].plate_id is None
+    assert detections[1].plate_id == detections[0].plate_id
     assert lookup_mock.await_count == 1
 
     assert DetectionOut.model_validate(detections[0]).voting_tag == "final"
-    assert DetectionOut.model_validate(detections[1]).voting_tag == "not_final"
+    assert DetectionOut.model_validate(detections[1]).voting_tag == "final"
     assert DetectionOut.model_validate(detections[0]).plate_annotation == "CJ05XYO"
-    assert DetectionOut.model_validate(detections[1]).plate_annotation == "GARBAGE"
+    assert DetectionOut.model_validate(detections[1]).plate_annotation == "CJ05XYO"
 
 
 @pytest.mark.asyncio
@@ -487,17 +491,22 @@ async def test_sparse_track_uses_highest_confidence_plate_for_fallback(
     ).scalars().all()
 
     assert len(detections) == 2
-    assert detections[0].ocr_normalized_text == "CJ 05 XYO"
+    # Every detection in the track is relabelled with the canonical plate
+    # chosen by fallback (highest-confidence valid read).
+    assert detections[0].ocr_normalized_text == "CJ 05 XYP"
     assert detections[1].ocr_normalized_text == "CJ 05 XYP"
+    # Per-frame raw OCR is preserved.
+    assert detections[0].ocr_raw_text == "CJ05XY0"
+    assert detections[1].ocr_raw_text == "CJ05XYP"
 
     lookup_mock.assert_awaited_once()
     assert lookup_mock.await_args.kwargs["plate_text"] == "CJ05XYP"
     assert lookup_mock.await_args.kwargs["detection_id"] == detections[1].id
 
-    assert detections[0].ticket_status is None
-    assert detections[0].plate_id is None
+    assert detections[0].ticket_status == "active"
+    assert detections[0].plate_id is not None
     assert detections[1].ticket_status == "active"
-    assert detections[1].plate_id is not None
+    assert detections[1].plate_id == detections[0].plate_id
 
 
 @pytest.mark.asyncio
@@ -540,8 +549,9 @@ async def test_track_stays_not_final_while_visible_and_finalizes_after_disappear
     ).scalars().all()
 
     assert len(detections) == 3
-    assert [d.ticket_status for d in detections] == [None, None, "active"]
-    assert DetectionOut.model_validate(detections[0]).voting_tag == "not_final"
-    assert DetectionOut.model_validate(detections[1]).voting_tag == "not_final"
+    # Track finalizes once at end-of-video and relabels all its detections.
+    assert [d.ticket_status for d in detections] == ["active", "active", "active"]
+    assert DetectionOut.model_validate(detections[0]).voting_tag == "final"
+    assert DetectionOut.model_validate(detections[1]).voting_tag == "final"
     assert DetectionOut.model_validate(detections[2]).voting_tag == "final"
     lookup_mock.assert_awaited_once()
