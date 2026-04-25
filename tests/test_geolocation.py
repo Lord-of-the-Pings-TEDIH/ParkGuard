@@ -39,14 +39,38 @@ def _bbox_centred_at(cx: float, cy: float, w: float = 40.0, h: float = 20.0) -> 
     return (cx - w / 2.0, cy - h / 2.0, w, h)
 
 
-def test_horizon_centre_pixel_raises_value_error() -> None:
-    """A plate exactly at the principal point with zero pitch is on the horizon."""
-    calc = PlateGeolocationCalculator(_intrinsics(pitch_deg=0.0))
+def test_horizon_centre_pixel_clamps_to_max_distance() -> None:
+    """A plate at the horizon (depression → 0) is clamped to ``max_distance_m``.
+
+    The previous implementation raised ValueError, which made portrait
+    handheld videos lose GPS for nearly every detection.  The contract now
+    is: the projection always returns *some* coordinate; far / above-horizon
+    plates land at ``max_distance_m`` ahead of the camera.
+    """
+    max_distance_m = 50.0
+    calc = PlateGeolocationCalculator(
+        _intrinsics(pitch_deg=0.0), max_distance_m=max_distance_m
+    )
     pose = VehiclePose(latitude=45.0, longitude=25.0, heading_deg=0.0)
     bbox = _bbox_centred_at(960, 540)
 
-    with pytest.raises(ValueError, match="horizon"):
-        calc.project(pose, bbox)
+    target_lat, target_lon = calc.project(pose, bbox)
+    distance = geodesic((pose.latitude, pose.longitude), (target_lat, target_lon)).meters
+    assert distance == pytest.approx(max_distance_m, rel=1e-3)
+
+
+def test_above_horizon_pixel_clamps_to_max_distance() -> None:
+    """A plate above the principal point (negative dv) also clamps cleanly."""
+    calc = PlateGeolocationCalculator(
+        _intrinsics(pitch_deg=5.0), max_distance_m=50.0
+    )
+    pose = VehiclePose(latitude=46.7700, longitude=23.5895, heading_deg=90.0)
+    # 200 pixels above the principal point: with pitch=5° and focal=1000,
+    # dv=-200 → alpha_v=-11.3° → depression=-6.3° (above horizon).
+    bbox = _bbox_centred_at(960, 540 - 200)
+    target_lat, target_lon = calc.project(pose, bbox)
+    distance = geodesic((pose.latitude, pose.longitude), (target_lat, target_lon)).meters
+    assert distance == pytest.approx(50.0, rel=1e-3)
 
 
 def test_camera_below_plate_height_rejected() -> None:

@@ -21,6 +21,7 @@ from app.pipeline.ocr import PlateReader
 from app.pipeline.processor import build_mobile_lpr_context, process_session
 from app.schemas.detection import DetectionOut, SessionOut
 from app.pipeline.frame_extractor import get_video_info
+from app.pipeline.video_metadata import extract_video_gps
 
 router = APIRouter()
 _plate_reader: PlateReader | None = None
@@ -151,13 +152,31 @@ async def list_sessions(db: AsyncSession = Depends(get_db)):
     return sessions
 
 
-def _validate_gps_pose(
+def _default_gps_pose() -> tuple[float | None, float | None, float | None]:
+    """Return the configured default Mobile-LPR pose, if all three are set.
+
+    When MOBILE_LPR_DEFAULT_LATITUDE / LONGITUDE / HEADING_DEG are all
+    configured in .env, every session created without an explicit pose falls
+    back to these defaults so the GPS projection runs and per-car coordinates
+    appear in the UI.  Returns ``(None, None, None)`` if any default is unset.
+    """
+    lat = settings.MOBILE_LPR_DEFAULT_LATITUDE
+    lon = settings.MOBILE_LPR_DEFAULT_LONGITUDE
+    heading = settings.MOBILE_LPR_DEFAULT_HEADING_DEG
+    if lat is None or lon is None or heading is None:
+        return (None, None, None)
+    return (float(lat), float(lon), float(heading) % 360.0)
+
+
+def _validate_explicit_gps_pose(
     lat: float | None, lon: float | None, heading: float | None
 ) -> tuple[float | None, float | None, float | None]:
-    """Return the GPS triple if all three are set, else (None, None, None).
+    """Validate user-provided GPS pose form fields.
 
     Mobile-LPR mode is all-or-nothing: a partial pose would silently disable
     spot validation in the pipeline and the user would never know why.
+    Returns ``(None, None, None)`` when nothing was supplied (so the caller
+    can decide whether to fall back to video metadata or config defaults).
     """
     provided = [v for v in (lat, lon, heading) if v is not None]
     if not provided:
@@ -172,6 +191,40 @@ def _validate_gps_pose(
     if not (-180.0 <= float(lon) <= 180.0):  # type: ignore[arg-type]
         raise HTTPException(status_code=400, detail="gps_longitude out of range")
     return (float(lat), float(lon), float(heading) % 360.0)  # type: ignore[arg-type]
+
+
+def _resolve_session_pose(
+    *,
+    explicit_lat: float | None,
+    explicit_lon: float | None,
+    explicit_heading: float | None,
+    video_path: Path,
+) -> tuple[float | None, float | None, float | None]:
+    """Pick the best Mobile-LPR pose for a new session.
+
+    Precedence (first usable wins):
+      1. The explicit lat/lon/heading triple sent on the form.
+      2. The GPS fix embedded in the uploaded video's container metadata
+         (e.g. ``com.apple.quicktime.location.ISO6709`` from iOS .MOV files),
+         combined with the configured default heading (or 0 = North).
+      3. The configured default pose from ``settings.MOBILE_LPR_DEFAULT_*``.
+    """
+    explicit = _validate_explicit_gps_pose(
+        explicit_lat, explicit_lon, explicit_heading
+    )
+    if explicit[0] is not None:
+        return explicit
+
+    metadata = extract_video_gps(video_path)
+    if metadata is not None:
+        meta_lat, meta_lon = metadata
+        # The container only stores lat/lon — heading falls back to the
+        # configured default, or 0° (North) when no default is set.
+        heading_default = settings.MOBILE_LPR_DEFAULT_HEADING_DEG
+        heading = float(heading_default) if heading_default is not None else 0.0
+        return (meta_lat, meta_lon, heading % 360.0)
+
+    return _default_gps_pose()
 
 
 @router.post("", response_model=SessionOut, status_code=201)
@@ -201,7 +254,12 @@ async def create_session(
     except Exception:
         pass
 
-    lat, lon, heading = _validate_gps_pose(gps_latitude, gps_longitude, gps_heading_deg)
+    lat, lon, heading = _resolve_session_pose(
+        explicit_lat=gps_latitude,
+        explicit_lon=gps_longitude,
+        explicit_heading=gps_heading_deg,
+        video_path=dest,
+    )
 
     new_session = Session(
         id=session_id,
@@ -257,7 +315,12 @@ async def create_session_from_test_file(
     except Exception:
         pass
 
-    lat, lon, heading = _validate_gps_pose(gps_latitude, gps_longitude, gps_heading_deg)
+    lat, lon, heading = _resolve_session_pose(
+        explicit_lat=gps_latitude,
+        explicit_lon=gps_longitude,
+        explicit_heading=gps_heading_deg,
+        video_path=dest,
+    )
 
     new_session = Session(
         id=session_id,

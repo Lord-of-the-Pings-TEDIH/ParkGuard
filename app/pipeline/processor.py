@@ -110,6 +110,7 @@ def build_mobile_lpr_context(
     calculator = PlateGeolocationCalculator(
         intrinsics,
         plate_height_m=float(settings.MOBILE_LPR_PLATE_HEIGHT_M),
+        max_distance_m=float(settings.MOBILE_LPR_MAX_DISTANCE_M),
     )
     pose = VehiclePose(
         latitude=float(session.gps_latitude),
@@ -592,6 +593,22 @@ async def _finalize_track_with_fallback(
 
     # Relabel every detection in the track.  ocr_raw_text is preserved so the
     # per-frame OCR remains visible; only the normalized view collapses.
+    #
+    # GPS handling is split between per-detection and per-track:
+    #   • target_latitude / target_longitude are computed from each detection's
+    #     own bbox so different cars in the same track sit at different points.
+    #     If eager projection ran at frame-time the value is already set; for
+    #     older rows (or when eager projection raised) we retry here.
+    #   • spot_match_status / target_distance_m / matched_spot_id are a
+    #     track-level decision driven by the best-confidence frame, so they
+    #     apply identically to every detection in the track.
+    if spot_result is not None:
+        _, _, track_status, track_distance, track_spot_id = spot_result
+    else:
+        track_status = None
+        track_distance = None
+        track_spot_id = None
+
     for detection_id in track.detection_ids:
         detection = await db.get(Detection, detection_id)
         if detection is None or detection.ticket_status is not None:
@@ -601,14 +618,31 @@ async def _finalize_track_with_fallback(
         detection.plate_id = plate.id
         detection.ticket_status = status
         detection.ticket_expires_at = expires_at
+
+        if mobile_lpr is not None and (
+            detection.target_latitude is None
+            or detection.target_longitude is None
+        ):
+            try:
+                d_lat, d_lon = mobile_lpr.calculator.project(
+                    mobile_lpr.pose,
+                    (
+                        float(detection.bbox_x),
+                        float(detection.bbox_y),
+                        float(detection.bbox_w),
+                        float(detection.bbox_h),
+                    ),
+                )
+            except ValueError:
+                pass
+            else:
+                detection.target_latitude = d_lat
+                detection.target_longitude = d_lon
+
         if spot_result is not None:
-            (
-                detection.target_latitude,
-                detection.target_longitude,
-                detection.spot_match_status,
-                detection.target_distance_m,
-                detection.matched_spot_id,
-            ) = spot_result
+            detection.spot_match_status = track_status
+            detection.target_distance_m = track_distance
+            detection.matched_spot_id = track_spot_id
 
     await db.flush()
     track.finalized = True
@@ -821,6 +855,21 @@ async def process_session(
                     ocr_normalized_text=normalized_plate_text,
                     is_valid_ro_plate=is_valid_ro_plate,
                 )
+                # Eagerly project this detection's bbox to a GPS coordinate so
+                # the live (pre-finalization) UI can show per-car GPS.  The
+                # spot-match status is left for finalization, when the canonical
+                # plate text is known and the cross-track registry has settled.
+                if mobile_lpr is not None:
+                    try:
+                        proj_lat, proj_lon = mobile_lpr.calculator.project(
+                            mobile_lpr.pose,
+                            (float(bbox_x), float(bbox_y), float(bbox_w), float(bbox_h)),
+                        )
+                    except ValueError:
+                        proj_lat = proj_lon = None
+                    if proj_lat is not None and proj_lon is not None:
+                        detection.target_latitude = proj_lat
+                        detection.target_longitude = proj_lon
                 db.add(detection)
                 await db.flush()
                 track.last_detection_id = detection.id

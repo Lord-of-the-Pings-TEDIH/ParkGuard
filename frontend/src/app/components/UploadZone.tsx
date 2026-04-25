@@ -121,13 +121,13 @@ export function UploadZone({ onUpload, isProcessing }: UploadZoneProps) {
             {selectedFile ? selectedFile.name : "Drop video here"}
           </p>
           <p className="mb-4 text-xs text-muted-foreground md:text-sm">
-            .mp4, .avi, .mkv · max 2GB
+            .mp4, .mov, .avi, .mkv
           </p>
           <input
             type="file"
             ref={fileInputRef}
             className="hidden"
-            accept=".mp4,.avi,.mkv,video/mp4,video/x-msvideo,video/x-matroska"
+            accept=".mp4,.mov,.avi,.mkv,video/mp4,video/quicktime,video/x-msvideo,video/x-matroska"
             onChange={handleFileSelect}
             disabled={isProcessing}
           />
@@ -231,13 +231,18 @@ export function UploadZone({ onUpload, isProcessing }: UploadZoneProps) {
 }
 
 function isValidVideoFile(file: File): boolean {
-  const validTypes = ["video/mp4", "video/x-msvideo", "video/x-matroska"];
-  const validExtensions = [".mp4", ".avi", ".mkv"];
-  const maxSize = 2 * 1024 * 1024 * 1024; // 2GB
+  const validTypes = [
+    "video/mp4",
+    "video/quicktime",
+    "video/x-msvideo",
+    "video/x-matroska",
+  ];
+  const validExtensions = [".mp4", ".mov", ".avi", ".mkv"];
 
   const hasValidType = validTypes.includes(file.type);
-  const hasValidExtension = validExtensions.some(ext => file.name.toLowerCase().endsWith(ext));
-  const hasValidSize = file.size <= maxSize;
+  const hasValidExtension = validExtensions.some((ext) =>
+    file.name.toLowerCase().endsWith(ext)
+  );
 
-  return (hasValidType || hasValidExtension) && hasValidSize;
+  return hasValidType || hasValidExtension;
 }

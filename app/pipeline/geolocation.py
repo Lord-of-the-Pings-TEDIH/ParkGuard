@@ -27,6 +27,16 @@ from geopy.distance import geodesic
 # accepted average for the ground-projection geometry.
 DEFAULT_PLATE_HEIGHT_M: float = 0.6
 
+# Far-distance clamp for the ground projection.  When a detected plate sits
+# at or above the geometric horizon (typical of distant cars in handheld
+# portrait video), the ray-to-ground intersection is mathematically at
+# infinity.  Rather than refusing to project, we cap the distance at this
+# value so every detected plate still gets *some* GPS coordinate.  The
+# trade-off is reduced accuracy for far cars, which is acceptable since the
+# downstream parking-spot lookup uses a small radius and will simply return
+# NO_SPOT_FOUND for these.
+DEFAULT_MAX_DISTANCE_M: float = 50.0
+
 
 @dataclass(frozen=True)
 class CameraIntrinsics:
@@ -55,6 +65,7 @@ class PlateGeolocationCalculator:
         self,
         intrinsics: CameraIntrinsics,
         plate_height_m: float = DEFAULT_PLATE_HEIGHT_M,
+        max_distance_m: float = DEFAULT_MAX_DISTANCE_M,
     ) -> None:
         if intrinsics.focal_length_px <= 0:
             raise ValueError("focal_length_px must be > 0")
@@ -65,10 +76,19 @@ class PlateGeolocationCalculator:
                 "camera height must exceed the plate height "
                 f"({intrinsics.height_m} <= {plate_height_m})"
             )
+        if max_distance_m <= 0:
+            raise ValueError("max_distance_m must be > 0")
 
         self.intrinsics = intrinsics
         self.plate_height_m = plate_height_m
+        self.max_distance_m = max_distance_m
         self._delta_height_m: float = intrinsics.height_m - plate_height_m
+        # Minimum depression angle for which we still treat the projection as
+        # finite.  Below this the plate is "near or above the horizon" and we
+        # clamp distance to ``max_distance_m`` instead of failing.
+        self._min_depression_rad: float = math.atan(
+            self._delta_height_m / max_distance_m
+        )
 
     def project(
         self,
@@ -115,14 +135,12 @@ class PlateGeolocationCalculator:
         alpha_v_rad = math.atan2(dv, f)
 
         # Total angle below the horizontal: camera tilt + per-pixel tilt.
+        # Plates near or above the geometric horizon (typical for distant
+        # cars in a handheld portrait shot) are clamped to a configurable
+        # maximum distance so every plate still produces a GPS estimate.
         depression_rad = math.radians(self.intrinsics.pitch_deg) + alpha_v_rad
-        if depression_rad <= 1e-6:
-            # The ray points at or above the horizon — it will never intersect
-            # the ground plane in front of the car.
-            raise ValueError(
-                "plate appears at or above the horizon; check camera pitch "
-                f"(depression={math.degrees(depression_rad):.3f}°)"
-            )
+        if depression_rad < self._min_depression_rad:
+            depression_rad = self._min_depression_rad
 
         distance_m = self._delta_height_m / math.tan(depression_rad)
 
