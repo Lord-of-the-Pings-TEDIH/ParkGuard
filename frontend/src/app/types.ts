@@ -2,6 +2,13 @@ export type SessionStatus = "pending" | "running" | "done" | "failed";
 export type TicketStatus = "active" | "subscription" | "grace" | "none" | "unknown";
 export type PlateType = "standard" | "temporary" | "diplomatic" | "unknown";
 export type VotingTag = "final" | "not_final";
+export type SpotMatchStatus = "MATCH" | "WRONG_PLATE" | "NO_SPOT_FOUND";
+
+export interface MobileLprPose {
+  latitude: number;
+  longitude: number;
+  headingDeg: number;
+}
 
 export interface Detection {
   id: string;
@@ -16,6 +23,11 @@ export interface Detection {
   voting_tag: VotingTag;
   plate_annotation: string;
   occurrences: number;
+  target_latitude: number | null;
+  target_longitude: number | null;
+  spot_match_status: SpotMatchStatus | null;
+  target_distance_m: number | null;
+  matched_spot_id: number | null;
 }
 
 export interface Session {
@@ -28,6 +40,20 @@ export interface Session {
   error_message: string | null;
   created_at: string;
   ended_at: string | null;
+  gps_latitude: number | null;
+  gps_longitude: number | null;
+  gps_heading_deg: number | null;
+}
+
+export interface ParkingSpot {
+  id: number;
+  spot_label: string;
+  parking_lot_id: number;
+  latitude: number | null;
+  longitude: number | null;
+  assigned_plate: string | null;
+  is_occupied: boolean;
+  updated_at: string;
 }
 
 export interface Plate {

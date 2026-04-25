@@ -18,7 +18,7 @@ from app.core.database import AsyncSessionLocal, get_db
 from app.models.detection import Detection, Frame, Session
 from app.models.parking import TicketCheck
 from app.pipeline.ocr import PlateReader
-from app.pipeline.processor import process_session
+from app.pipeline.processor import build_mobile_lpr_context, process_session
 from app.schemas.detection import DetectionOut, SessionOut
 from app.pipeline.frame_extractor import get_video_info
 
@@ -26,6 +26,10 @@ router = APIRouter()
 _plate_reader: PlateReader | None = None
 _processing_tasks: dict[uuid.UUID, asyncio.Task[None]] = {}
 _VIDEO_EXTENSIONS = {".mp4", ".avi", ".mkv", ".mov"}
+# Streaming-write chunk size for uploads.  At 4 MiB we cap RAM use at a
+# constant level even for multi-GB videos, while still amortising syscall
+# overhead.  Avoids OOM from `await file.read()` on large files.
+_UPLOAD_CHUNK_BYTES = 4 * 1024 * 1024
 _SESSION_UPLOAD_PREFIX = re.compile(
     r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}_.+"
 )
@@ -86,10 +90,44 @@ def _estimate_sampled_total_frames(video_info: dict, fps_target: float) -> int |
     return max(1, (total_frames + interval - 1) // interval)
 
 
+def _build_mobile_lpr_for_session(session: Session) -> object | None:
+    """Resolve the geolocation context for a session, if GPS pose is set.
+
+    The image dimensions are read from the source video on disk; if the file
+    is missing or unreadable we still return ``None`` so processing falls back
+    to the static-camera flow rather than crashing.
+    """
+    if (
+        session.gps_latitude is None
+        or session.gps_longitude is None
+        or session.gps_heading_deg is None
+    ):
+        return None
+
+    video_path = Path(settings.UPLOAD_DIR) / f"{session.id}_{session.source_filename}"
+    try:
+        video_info = get_video_info(str(video_path))
+    except Exception:
+        return None
+
+    return build_mobile_lpr_context(
+        session,
+        image_width=int(video_info.get("width") or 0) or None,
+        image_height=int(video_info.get("height") or 0) or None,
+    )
+
+
 async def _run_processing_job(session_id: uuid.UUID) -> None:
     try:
         async with AsyncSessionLocal() as db:
-            await process_session(session_id, db, ocr=_recognize_plate)
+            session = await db.get(Session, session_id)
+            mobile_lpr = _build_mobile_lpr_for_session(session) if session else None
+            await process_session(
+                session_id,
+                db,
+                ocr=_recognize_plate,
+                mobile_lpr=mobile_lpr,
+            )
     except asyncio.CancelledError:
         async with AsyncSessionLocal() as db:
             session = await db.get(Session, session_id)
@@ -113,19 +151,47 @@ async def list_sessions(db: AsyncSession = Depends(get_db)):
     return sessions
 
 
+def _validate_gps_pose(
+    lat: float | None, lon: float | None, heading: float | None
+) -> tuple[float | None, float | None, float | None]:
+    """Return the GPS triple if all three are set, else (None, None, None).
+
+    Mobile-LPR mode is all-or-nothing: a partial pose would silently disable
+    spot validation in the pipeline and the user would never know why.
+    """
+    provided = [v for v in (lat, lon, heading) if v is not None]
+    if not provided:
+        return (None, None, None)
+    if len(provided) != 3:
+        raise HTTPException(
+            status_code=400,
+            detail="Mobile-LPR requires gps_latitude, gps_longitude and gps_heading_deg together.",
+        )
+    if not (-90.0 <= float(lat) <= 90.0):  # type: ignore[arg-type]
+        raise HTTPException(status_code=400, detail="gps_latitude out of range")
+    if not (-180.0 <= float(lon) <= 180.0):  # type: ignore[arg-type]
+        raise HTTPException(status_code=400, detail="gps_longitude out of range")
+    return (float(lat), float(lon), float(heading) % 360.0)  # type: ignore[arg-type]
+
+
 @router.post("", response_model=SessionOut, status_code=201)
 async def create_session(
     file: UploadFile,
     fps_target: float | None = Form(default=None),
+    gps_latitude: float | None = Form(default=None),
+    gps_longitude: float | None = Form(default=None),
+    gps_heading_deg: float | None = Form(default=None),
     db: AsyncSession = Depends(get_db),
 ):
     session_id = uuid.uuid4()
     filename = Path(file.filename or "unknown_file").name
     dest = Path(settings.UPLOAD_DIR) / f"{session_id}_{filename}"
 
+    # Stream chunks instead of `await file.read()` so multi-GB uploads don't
+    # have to fit in memory.
     async with aiofiles.open(dest, "wb") as out:
-        content = await file.read()
-        await out.write(content)
+        while chunk := await file.read(_UPLOAD_CHUNK_BYTES):
+            await out.write(chunk)
 
     effective_fps_target = _effective_fps_target(fps_target)
     total_frames = None
@@ -135,6 +201,8 @@ async def create_session(
     except Exception:
         pass
 
+    lat, lon, heading = _validate_gps_pose(gps_latitude, gps_longitude, gps_heading_deg)
+
     new_session = Session(
         id=session_id,
         source_filename=filename,
@@ -142,6 +210,9 @@ async def create_session(
         fps_target=effective_fps_target,
         frames_processed=0,
         total_frames=total_frames,
+        gps_latitude=lat,
+        gps_longitude=lon,
+        gps_heading_deg=heading,
     )
     db.add(new_session)
     await db.commit()
@@ -167,6 +238,9 @@ async def list_test_files():
 @router.post("/test-files/{filename}", response_model=SessionOut, status_code=201)
 async def create_session_from_test_file(
     filename: str,
+    gps_latitude: float | None = Form(default=None),
+    gps_longitude: float | None = Form(default=None),
+    gps_heading_deg: float | None = Form(default=None),
     db: AsyncSession = Depends(get_db),
 ):
     source = _resolve_test_upload_file(filename)
@@ -183,6 +257,8 @@ async def create_session_from_test_file(
     except Exception:
         pass
 
+    lat, lon, heading = _validate_gps_pose(gps_latitude, gps_longitude, gps_heading_deg)
+
     new_session = Session(
         id=session_id,
         source_filename=source.name,
@@ -190,6 +266,9 @@ async def create_session_from_test_file(
         fps_target=effective_fps_target,
         frames_processed=0,
         total_frames=total_frames,
+        gps_latitude=lat,
+        gps_longitude=lon,
+        gps_heading_deg=heading,
     )
     db.add(new_session)
     await db.commit()

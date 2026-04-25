@@ -41,6 +41,12 @@ class DetectionOut(BaseModel):
     ticket_status: str | None = None
     ticket_expires_at: datetime | None = None
 
+    target_latitude: float | None = None
+    target_longitude: float | None = None
+    spot_match_status: Literal["MATCH", "WRONG_PLATE", "NO_SPOT_FOUND"] | None = None
+    target_distance_m: float | None = None
+    matched_spot_id: int | None = None
+
     created_at: datetime
     plate_id: uuid.UUID | None = None
 
@@ -111,5 +117,9 @@ class SessionOut(BaseModel):
     error_message: str | None = None
     created_at: datetime
     ended_at: datetime | None = None
+
+    gps_latitude: float | None = None
+    gps_longitude: float | None = None
+    gps_heading_deg: float | None = None
 
     model_config = ConfigDict(from_attributes=True)

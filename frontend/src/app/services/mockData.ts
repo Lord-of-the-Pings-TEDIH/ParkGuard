@@ -11,6 +11,9 @@ export const MOCK_SESSIONS: Session[] = [
     error_message: null,
     created_at: new Date(Date.now() - 3600000).toISOString(),
     ended_at: new Date(Date.now() - 3000000).toISOString(),
+    gps_latitude: null,
+    gps_longitude: null,
+    gps_heading_deg: null,
   },
   {
     id: "2",
@@ -22,6 +25,9 @@ export const MOCK_SESSIONS: Session[] = [
     error_message: null,
     created_at: new Date(Date.now() - 7200000).toISOString(),
     ended_at: new Date(Date.now() - 6800000).toISOString(),
+    gps_latitude: null,
+    gps_longitude: null,
+    gps_heading_deg: null,
   },
 ];
 
@@ -39,6 +45,11 @@ export const MOCK_DETECTIONS: Detection[] = [
     voting_tag: "final",
     plate_annotation: "B123ABC",
     occurrences: 1,
+    target_latitude: null,
+    target_longitude: null,
+    spot_match_status: null,
+    target_distance_m: null,
+    matched_spot_id: null,
   },
   {
     id: "2",
@@ -53,6 +64,11 @@ export const MOCK_DETECTIONS: Detection[] = [
     voting_tag: "final",
     plate_annotation: "CJ456DEF",
     occurrences: 1,
+    target_latitude: null,
+    target_longitude: null,
+    spot_match_status: null,
+    target_distance_m: null,
+    matched_spot_id: null,
   },
   {
     id: "3",
@@ -67,6 +83,11 @@ export const MOCK_DETECTIONS: Detection[] = [
     voting_tag: "final",
     plate_annotation: "B789GHI",
     occurrences: 1,
+    target_latitude: null,
+    target_longitude: null,
+    spot_match_status: null,
+    target_distance_m: null,
+    matched_spot_id: null,
   },
   {
     id: "4",
@@ -81,6 +102,11 @@ export const MOCK_DETECTIONS: Detection[] = [
     voting_tag: "final",
     plate_annotation: "B321XYZ",
     occurrences: 1,
+    target_latitude: null,
+    target_longitude: null,
+    spot_match_status: null,
+    target_distance_m: null,
+    matched_spot_id: null,
   },
   {
     id: "5",
@@ -95,6 +121,11 @@ export const MOCK_DETECTIONS: Detection[] = [
     voting_tag: "final",
     plate_annotation: "IF654MNO",
     occurrences: 1,
+    target_latitude: null,
+    target_longitude: null,
+    spot_match_status: null,
+    target_distance_m: null,
+    matched_spot_id: null,
   },
   {
     id: "6",
@@ -109,6 +140,11 @@ export const MOCK_DETECTIONS: Detection[] = [
     voting_tag: "final",
     plate_annotation: "B555PQR",
     occurrences: 1,
+    target_latitude: null,
+    target_longitude: null,
+    spot_match_status: null,
+    target_distance_m: null,
+    matched_spot_id: null,
   },
 ];
 
@@ -159,6 +195,9 @@ export function generateMockSession(filename: string, fpsTarget: number): Sessio
     error_message: null,
     created_at: new Date().toISOString(),
     ended_at: null,
+    gps_latitude: null,
+    gps_longitude: null,
+    gps_heading_deg: null,
   };
 }
 
@@ -202,5 +241,10 @@ export function generateMockDetection(sessionId: string, index: number): Detecti
     voting_tag: status !== "unknown" ? "final" : "not_final",
     plate_annotation: plateText,
     occurrences: 1,
+    target_latitude: null,
+    target_longitude: null,
+    spot_match_status: null,
+    target_distance_m: null,
+    matched_spot_id: null,
   };
 }

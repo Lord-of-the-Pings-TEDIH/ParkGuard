@@ -26,8 +26,14 @@ from app.models.detection import Detection, Frame, Plate, Session
 from app.pipeline.deskew import deskew_plate
 from app.pipeline.detector import PlateDetector
 from app.pipeline.frame_extractor import extract_frames, get_video_info
+from app.pipeline.geolocation import (
+    CameraIntrinsics,
+    PlateGeolocationCalculator,
+    VehiclePose,
+)
 from app.pipeline.plate_color import PlateType, classify_plate_color
 from app.pipeline.plate_validator import compact_plate, is_invalid_plate, normalize_plate
+from app.services.parking_validation import validate_parking_at_location
 from app.services.ticket_lookup import lookup_ticket
 
 logger = logging.getLogger(__name__)
@@ -55,9 +61,66 @@ class PlateTrack:
     best_conf_plate: str | None = None
     best_confidence: float = 0.0
     best_conf_detection_id: uuid.UUID | None = None
+    best_conf_bbox: tuple[int, int, int, int] | None = None
     last_detection_id: uuid.UUID | None = None
     detection_ids: list[uuid.UUID] = field(default_factory=list)
     finalized: bool = False
+
+
+@dataclass(frozen=True)
+class MobileLPRContext:
+    """Per-session geolocation context.
+
+    Bundling the calculator + pose + radius lets us pass a single optional
+    object to ``process_session`` rather than half a dozen scalars.  When
+    ``None`` the geolocation step is skipped entirely.
+    """
+
+    calculator: PlateGeolocationCalculator
+    pose: VehiclePose
+    search_radius_m: float
+
+
+def build_mobile_lpr_context(
+    session: Session,
+    *,
+    image_width: int | None,
+    image_height: int | None,
+) -> MobileLPRContext | None:
+    """Construct a ``MobileLPRContext`` if ``session`` has GPS pose set.
+
+    Returns ``None`` when the session lacks any of latitude/longitude/heading
+    or when the image dimensions cannot be determined — in either case the
+    pipeline runs without spot validation, exactly like a static camera.
+    """
+    if session.gps_latitude is None or session.gps_longitude is None:
+        return None
+    if session.gps_heading_deg is None:
+        return None
+    if not image_width or not image_height:
+        return None
+
+    intrinsics = CameraIntrinsics(
+        height_m=float(settings.MOBILE_LPR_CAMERA_HEIGHT_M),
+        focal_length_px=float(settings.MOBILE_LPR_CAMERA_FOCAL_PX),
+        pitch_deg=float(settings.MOBILE_LPR_CAMERA_PITCH_DEG),
+        image_width_px=int(image_width),
+        image_height_px=int(image_height),
+    )
+    calculator = PlateGeolocationCalculator(
+        intrinsics,
+        plate_height_m=float(settings.MOBILE_LPR_PLATE_HEIGHT_M),
+    )
+    pose = VehiclePose(
+        latitude=float(session.gps_latitude),
+        longitude=float(session.gps_longitude),
+        heading_deg=float(session.gps_heading_deg),
+    )
+    return MobileLPRContext(
+        calculator=calculator,
+        pose=pose,
+        search_radius_m=float(settings.MOBILE_LPR_SEARCH_RADIUS_M),
+    )
 
 
 RecognizerOutput: TypeAlias = str | tuple[str | None, float] | None
@@ -406,6 +469,46 @@ async def _get_or_create_plate(
     return plate
 
 
+async def _resolve_spot_match(
+    *,
+    track: PlateTrack,
+    plate_text: str,
+    mobile_lpr: MobileLPRContext,
+    db: AsyncSession,
+) -> tuple[float, float, str, float | None, int | None] | None:
+    """Project the track's best bbox to GPS and validate against ParkingSpot.
+
+    Returns ``None`` if the geometry is degenerate (plate above the horizon).
+    Otherwise returns ``(target_lat, target_lon, status, distance_m, spot_id)``
+    so the caller can stamp every detection in the track with the same result.
+    """
+    bbox = track.best_conf_bbox or track.bbox
+    bbox_xywh = (float(bbox[0]), float(bbox[1]), float(bbox[2]), float(bbox[3]))
+
+    try:
+        target_lat, target_lon = mobile_lpr.calculator.project(
+            mobile_lpr.pose, bbox_xywh
+        )
+    except ValueError as exc:
+        logger.debug("Skipping geolocation for track %s: %s", track.track_id, exc)
+        return None
+
+    spot_match = await validate_parking_at_location(
+        target_lat=target_lat,
+        target_lon=target_lon,
+        plate_text=plate_text,
+        db=db,
+        radius_m=mobile_lpr.search_radius_m,
+    )
+    return (
+        target_lat,
+        target_lon,
+        spot_match.status,
+        spot_match.distance_m,
+        spot_match.spot.id if spot_match.spot is not None else None,
+    )
+
+
 async def _finalize_track_with_fallback(
     track: PlateTrack,
     *,
@@ -413,6 +516,7 @@ async def _finalize_track_with_fallback(
     zone_id: int | None,
     min_track_votes: int,
     finalized_registry: dict[str, tuple[int, float]],
+    mobile_lpr: MobileLPRContext | None = None,
 ) -> None:
     """Finalize unresolved tracks with the best-confidence valid plate.
 
@@ -474,6 +578,18 @@ async def _finalize_track_with_fallback(
         detection_id=representative.id,
     )
 
+    # Mobile-LPR: project the plate's pixel position to a GPS coordinate and
+    # check it against the registered parking spots.  Skipped for static
+    # cameras (mobile_lpr is None) or when the geometry is degenerate.
+    spot_result: tuple[float, float, str, float | None, int | None] | None = None
+    if mobile_lpr is not None:
+        spot_result = await _resolve_spot_match(
+            track=track,
+            plate_text=compact_text,
+            mobile_lpr=mobile_lpr,
+            db=db,
+        )
+
     # Relabel every detection in the track.  ocr_raw_text is preserved so the
     # per-frame OCR remains visible; only the normalized view collapses.
     for detection_id in track.detection_ids:
@@ -485,6 +601,14 @@ async def _finalize_track_with_fallback(
         detection.plate_id = plate.id
         detection.ticket_status = status
         detection.ticket_expires_at = expires_at
+        if spot_result is not None:
+            (
+                detection.target_latitude,
+                detection.target_longitude,
+                detection.spot_match_status,
+                detection.target_distance_m,
+                detection.matched_spot_id,
+            ) = spot_result
 
     await db.flush()
     track.finalized = True
@@ -506,8 +630,16 @@ async def process_session(
     *,
     ocr: Recognizer | None = None,
     zone_id: int | None = None,
+    mobile_lpr: MobileLPRContext | None = None,
 ) -> None:
-    """Process every frame in a session's video file with robust OCR/voting."""
+    """Process every frame in a session's video file with robust OCR/voting.
+
+    When ``mobile_lpr`` is provided, every finalised track also has its
+    bounding box projected to a GPS coordinate and validated against the
+    registered ``ParkingSpot`` rows; the resulting status/coords are stamped
+    on every detection in the track.  Pass ``None`` for the static-camera
+    flow (preserves existing behaviour).
+    """
     recognize = ocr or _noop_ocr
 
     session = await db.get(Session, session_id)
@@ -577,6 +709,7 @@ async def process_session(
                     zone_id=zone_id,
                     min_track_votes=min_track_votes,
                     finalized_registry=finalized_plate_registry,
+                    mobile_lpr=mobile_lpr,
                 )
 
             detections = detector.detect(frame_img, frame_index=frame_index)
@@ -702,6 +835,7 @@ async def process_session(
                     track.best_confidence = candidate.confidence
                     track.best_conf_plate = candidate.normalized
                     track.best_conf_detection_id = detection.id
+                    track.best_conf_bbox = bbox
 
             frames_processed += 1
             session.frames_processed = frames_processed
@@ -715,6 +849,7 @@ async def process_session(
                 zone_id=zone_id,
                 min_track_votes=min_track_votes,
                 finalized_registry=finalized_plate_registry,
+                mobile_lpr=mobile_lpr,
             )
 
         session.frames_processed = frames_processed

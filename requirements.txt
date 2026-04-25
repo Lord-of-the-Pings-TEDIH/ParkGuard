@@ -14,3 +14,4 @@ numpy<2
 ultralytics==8.3.*
 paddleocr==3.4.*
 paddlepaddle; python_version < "3.13"
+geopy==2.4.*

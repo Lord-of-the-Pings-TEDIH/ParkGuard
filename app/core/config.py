@@ -28,6 +28,20 @@ class Settings(BaseSettings):
     # in challenging lighting conditions at the cost of ~3× OCR time.
     OCR_MULTI_PASS: bool = True
 
+    # --- Mobile-LPR (Mobile License Plate Recognition) ---
+    # Defaults for the police-car camera intrinsics used by
+    # PlateGeolocationCalculator.  Override per-deployment in .env.  The
+    # geolocation step is only enabled when a Session is created with
+    # GPS pose; otherwise these values are unused.
+    MOBILE_LPR_CAMERA_HEIGHT_M: float = 1.5
+    MOBILE_LPR_CAMERA_FOCAL_PX: float = 1000.0
+    MOBILE_LPR_CAMERA_PITCH_DEG: float = 5.0
+    # Plate centre is assumed at this height above the ground.
+    MOBILE_LPR_PLATE_HEIGHT_M: float = 0.6
+    # Search radius (metres) used by validate_parking_at_location to bind
+    # a projected GPS point to a registered ParkingSpot.
+    MOBILE_LPR_SEARCH_RADIUS_M: float = 3.0
+
     # --- AI Super-Resolution ---
     # When enabled, crops smaller than OCR_SUPER_RES_MIN_HEIGHT are upscaled
     # by an AI model (ESPCN by default) before OCR, improving accuracy on

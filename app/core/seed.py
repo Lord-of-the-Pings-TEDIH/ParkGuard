@@ -5,8 +5,24 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.parking import ParkingZone, ParkingTicket, ParkingSubscription
+from app.models.parking_lot import ParkingLot
+from app.models.parking_spot import ParkingSpot
 
 logger = logging.getLogger(__name__)
+
+
+# Mobile-LPR demo coordinates: a small block in central Cluj-Napoca.  Spots
+# are spaced ~6 m apart so a 3 m search radius cleanly disambiguates them.
+# Real deployments will overwrite these via the /api/parking/spots endpoint
+# or a CSV import; this is just enough data to demo the feature end-to-end.
+_DEMO_PARKING_LOT_NAME = "Cluj-Napoca Centru — Demo"
+_DEMO_SPOTS: list[tuple[str, float, float, str | None]] = [
+    # (label, latitude, longitude, assigned_plate)
+    ("A-01", 46.770100, 23.589500, "B11AAA"),
+    ("A-02", 46.770155, 23.589500, "B22BBB"),
+    ("A-03", 46.770210, 23.589500, "CJ05XYZ"),
+    ("A-04", 46.770265, 23.589500, None),  # unreserved spot
+]
 
 async def seed_db(session: AsyncSession) -> None:
     """Seed the database with initial parking data if it is empty."""
@@ -124,6 +140,31 @@ async def seed_db(session: AsyncSession) -> None:
     )
     
     session.add_all([s1, s2])
-    
+
+    # Mobile-LPR demo data: a small parking lot with GPS-tagged spots and a
+    # mix of reserved/unreserved entries.  Idempotent on its own — safe to
+    # re-run because the outer guard already returned if the zone exists.
+    lot = ParkingLot(
+        name=_DEMO_PARKING_LOT_NAME,
+        location="Cluj-Napoca, RO",
+        total_spots=len(_DEMO_SPOTS),
+    )
+    session.add(lot)
+    await session.flush()
+
+    for label, lat, lon, plate in _DEMO_SPOTS:
+        session.add(
+            ParkingSpot(
+                spot_label=label,
+                parking_lot_id=lot.id,
+                latitude=lat,
+                longitude=lon,
+                assigned_plate=plate,
+            )
+        )
+
     await session.commit()
-    logger.info("Database successfully seeded with 10 exact parking plates.")
+    logger.info(
+        "Database successfully seeded: 10 plate fixtures + %d demo parking spots.",
+        len(_DEMO_SPOTS),
+    )

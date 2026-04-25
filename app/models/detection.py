@@ -42,6 +42,13 @@ class Session(Base):
         DateTime(timezone=True), nullable=True
     )
 
+    # Mobile-LPR pose: GPS position and heading of the police car at capture time.
+    # All three must be set together to enable spot validation; otherwise the
+    # geolocation step is skipped and the session behaves like a static camera.
+    gps_latitude: Mapped[float | None] = mapped_column(Float, nullable=True)
+    gps_longitude: Mapped[float | None] = mapped_column(Float, nullable=True)
+    gps_heading_deg: Mapped[float | None] = mapped_column(Float, nullable=True)
+
     # Relationships
     frames: Mapped[list["Frame"]] = relationship(
         back_populates="session", cascade="all, delete-orphan"
@@ -108,6 +115,19 @@ class Detection(Base):
     )
     ticket_expires_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
+    )
+
+    # Mobile-LPR projection result.  Populated when the parent Session has GPS
+    # pose set; otherwise the values stay NULL and the frontend hides the spot
+    # match badge.
+    target_latitude: Mapped[float | None] = mapped_column(Float, nullable=True)
+    target_longitude: Mapped[float | None] = mapped_column(Float, nullable=True)
+    spot_match_status: Mapped[str | None] = mapped_column(
+        String(20), nullable=True
+    )
+    target_distance_m: Mapped[float | None] = mapped_column(Float, nullable=True)
+    matched_spot_id: Mapped[int | None] = mapped_column(
+        ForeignKey("parking_spots.id"), nullable=True, index=True
     )
 
     created_at: Mapped[datetime] = mapped_column(

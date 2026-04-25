@@ -1,8 +1,9 @@
 import { Trash2, PlayCircle, Loader2 } from "lucide-react";
 import { motion } from "motion/react";
 import { Button } from "./ui/button";
+import { MobileLprPanel } from "./MobileLprPanel";
 import { formatRelativeTime } from "../utils/format";
-import type { Session } from "../types";
+import type { MobileLprPose, Session } from "../types";
 
 interface SessionHistoryProps {
   sessions: Session[];
@@ -13,6 +14,7 @@ interface SessionHistoryProps {
   onSelectSession: (id: string) => void;
   onDeleteSession: (id: string) => void;
   onRunHardcodedTest: (filename: string) => void;
+  onMobileLprPoseChange: (pose: MobileLprPose | null) => void;
 }
 
 export function SessionHistory({
@@ -24,6 +26,7 @@ export function SessionHistory({
   onSelectSession,
   onDeleteSession,
   onRunHardcodedTest,
+  onMobileLprPoseChange,
 }: SessionHistoryProps) {
   return (
     <div className="flex h-full min-h-0 flex-col border-border bg-card lg:border-l">
@@ -34,6 +37,9 @@ export function SessionHistory({
 
       <div className="min-h-0 flex-1 overflow-y-auto">
         <div className="space-y-2 p-3">
+          <MobileLprPanel onPoseChange={onMobileLprPoseChange} />
+          <div className="my-3 h-px bg-border" />
+
           {testFiles.length > 0 && (
             <>
               <div className="mb-2 text-xs font-medium uppercase tracking-wide text-muted-foreground">

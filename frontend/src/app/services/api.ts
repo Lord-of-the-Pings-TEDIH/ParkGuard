@@ -1,4 +1,11 @@
-import type { Detection, Session, Plate } from "../types";
+import type {
+  Detection,
+  MobileLprPose,
+  ParkingSpot,
+  Plate,
+  Session,
+  SpotMatchStatus,
+} from "../types";
 
 const API_BASE = "/api";
 
@@ -12,6 +19,9 @@ interface BackendSession {
   error_message: string | null;
   created_at: string;
   ended_at: string | null;
+  gps_latitude: number | null;
+  gps_longitude: number | null;
+  gps_heading_deg: number | null;
 }
 
 interface BackendDetection {
@@ -26,6 +36,22 @@ interface BackendDetection {
   created_at: string;
   voting_tag?: Detection["voting_tag"] | null;
   plate_annotation?: string | null;
+  target_latitude?: number | null;
+  target_longitude?: number | null;
+  spot_match_status?: SpotMatchStatus | null;
+  target_distance_m?: number | null;
+  matched_spot_id?: number | null;
+}
+
+interface BackendParkingSpot {
+  id: number;
+  spot_label: string;
+  parking_lot_id: number;
+  latitude: number | null;
+  longitude: number | null;
+  assigned_plate: string | null;
+  is_occupied: boolean;
+  updated_at: string;
 }
 
 interface BackendPlate {
@@ -92,6 +118,9 @@ function mapSession(session: BackendSession): Session {
     error_message: session.error_message,
     created_at: session.created_at,
     ended_at: session.ended_at,
+    gps_latitude: session.gps_latitude ?? null,
+    gps_longitude: session.gps_longitude ?? null,
+    gps_heading_deg: session.gps_heading_deg ?? null,
   };
 }
 
@@ -111,6 +140,24 @@ function mapDetection(detection: BackendDetection): Detection {
       detection.plate_annotation ??
       (detection.ocr_normalized_text ?? detection.ocr_raw_text ?? detection.id),
     occurrences: 1,
+    target_latitude: detection.target_latitude ?? null,
+    target_longitude: detection.target_longitude ?? null,
+    spot_match_status: detection.spot_match_status ?? null,
+    target_distance_m: detection.target_distance_m ?? null,
+    matched_spot_id: detection.matched_spot_id ?? null,
+  };
+}
+
+function mapParkingSpot(spot: BackendParkingSpot): ParkingSpot {
+  return {
+    id: spot.id,
+    spot_label: spot.spot_label,
+    parking_lot_id: spot.parking_lot_id,
+    latitude: spot.latitude,
+    longitude: spot.longitude,
+    assigned_plate: spot.assigned_plate,
+    is_occupied: spot.is_occupied,
+    updated_at: spot.updated_at,
   };
 }
 
@@ -187,10 +234,19 @@ function mapPlate(plate: BackendPlate): Plate {
   };
 }
 
-export async function createSession(file: File, fpsTarget: number): Promise<Session> {
+export async function createSession(
+  file: File,
+  fpsTarget: number,
+  pose?: MobileLprPose | null,
+): Promise<Session> {
   const formData = new FormData();
   formData.append("file", file);
   formData.append("fps_target", String(fpsTarget));
+  if (pose) {
+    formData.append("gps_latitude", String(pose.latitude));
+    formData.append("gps_longitude", String(pose.longitude));
+    formData.append("gps_heading_deg", String(pose.headingDeg));
+  }
 
   const session = await fetchApi<BackendSession>(`${API_BASE}/sessions`, {
     method: "POST",
@@ -199,16 +255,31 @@ export async function createSession(file: File, fpsTarget: number): Promise<Sess
   return mapSession(session);
 }
 
+export async function getParkingSpots(): Promise<ParkingSpot[]> {
+  const spots = await fetchApi<BackendParkingSpot[]>(`${API_BASE}/parking/spots`);
+  return spots.map(mapParkingSpot);
+}
+
 export async function getHardcodedTestFiles(): Promise<string[]> {
   return fetchApi<string[]>(`${API_BASE}/sessions/test-files`);
 }
 
-export async function createSessionFromHardcodedTest(filename: string): Promise<Session> {
+export async function createSessionFromHardcodedTest(
+  filename: string,
+  pose?: MobileLprPose | null,
+): Promise<Session> {
+  const init: RequestInit = { method: "POST" };
+  if (pose) {
+    const formData = new FormData();
+    formData.append("gps_latitude", String(pose.latitude));
+    formData.append("gps_longitude", String(pose.longitude));
+    formData.append("gps_heading_deg", String(pose.headingDeg));
+    init.body = formData;
+  }
+
   const session = await fetchApi<BackendSession>(
     `${API_BASE}/sessions/test-files/${encodeURIComponent(filename)}`,
-    {
-      method: "POST",
-    }
+    init,
   );
   return mapSession(session);
 }
