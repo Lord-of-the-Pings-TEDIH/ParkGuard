@@ -150,9 +150,20 @@ export function Dashboard() {
       detectionsCacheRef.current.set(session.id, []);
       setViewState("processing");
       void fetchSessions();
-      void startSessionProcessing(session.id).catch((err) => {
-        setError(err instanceof Error ? err.message : "Failed to start processing");
-      });
+      // Adopt the post-/process status (running) so the Cancel button shows
+      // immediately.  Without this the activeSession stays at "pending" until
+      // an SSE terminal event fires, which never happens for a long-running
+      // session.
+      startSessionProcessing(session.id)
+        .then((updatedSession) => {
+          setActiveSession((prev) =>
+            prev?.id === updatedSession.id ? updatedSession : prev,
+          );
+          sessionCacheRef.current.set(updatedSession.id, updatedSession);
+        })
+        .catch((err) => {
+          setError(err instanceof Error ? err.message : "Failed to start processing");
+        });
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to create session");
     }
@@ -169,9 +180,16 @@ export function Dashboard() {
       detectionsCacheRef.current.set(session.id, []);
       setViewState("processing");
       void fetchSessions();
-      void startSessionProcessing(session.id).catch((err) => {
-        setError(err instanceof Error ? err.message : "Failed to start processing");
-      });
+      startSessionProcessing(session.id)
+        .then((updatedSession) => {
+          setActiveSession((prev) =>
+            prev?.id === updatedSession.id ? updatedSession : prev,
+          );
+          sessionCacheRef.current.set(updatedSession.id, updatedSession);
+        })
+        .catch((err) => {
+          setError(err instanceof Error ? err.message : "Failed to start processing");
+        });
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to create test session");
     } finally {

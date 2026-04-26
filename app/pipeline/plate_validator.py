@@ -99,6 +99,7 @@ COUNTY_CODES: Final[frozenset[str]] = frozenset(
 
 _NON_ALNUM_RE: Final[re.Pattern[str]] = re.compile(r"[^A-Z0-9]")
 _INSTITUTION_PREFIXES: Final[frozenset[str]] = frozenset({"MAI", "SPP", "GUV", "SEN"})
+_DIPLO_PREFIXES: Final[frozenset[str]] = frozenset({"CD", "TC", "CO"})
 _INSTITUTION_EQUIV: Final[dict[str, str]] = {"C": "G", **NUM_TO_LET}
 _DIPLO_FORCED_PREFIX: Final[dict[str, str]] = {
     "CD": "CD",
@@ -131,6 +132,42 @@ def apply_correction(text: str, mapping: Mapping[str, str]) -> str:
 
 def is_valid_county(county: str) -> bool:
     return county in COUNTY_CODES
+
+
+def extract_county(compact_plate_text: str) -> str | None:
+    """Return the Romanian county code embedded in a compact plate, or None.
+
+    Operates on the *compact* form (no spaces) — the same shape stored in
+    ``Plate.normalized_text``.  Plate families that don't carry a county
+    (institution / diplomatic / army) return ``None`` so the registry UI
+    doesn't render a misleading "county" badge for them.
+    """
+    if not compact_plate_text:
+        return None
+
+    text = compact_plate_text.upper()
+
+    # Institution / diplomatic / army plates have no county.
+    if len(text) >= 3 and text[:3] in _INSTITUTION_PREFIXES:
+        return None
+    if len(text) >= 2 and text[:2] in _DIPLO_PREFIXES:
+        return None
+    if len(text) >= 2 and text[0] == "A" and text[1].isdigit():
+        return None
+
+    # Electric (E + body) and probe (P + body) — strip the prefix and recurse.
+    if len(text) >= 4 and text[0] in {"E", "P"}:
+        nested = extract_county(text[1:])
+        if nested is not None:
+            return nested
+
+    # Bucharest plates always start with a single ``B`` followed by digits.
+    if text[0] == "B" and len(text) >= 2 and text[1].isdigit():
+        return "B"
+
+    if len(text) >= 2 and text[:2] in COUNTY_CODES:
+        return text[:2]
+    return None
 
 
 # ---------------------------------------------------------------------------

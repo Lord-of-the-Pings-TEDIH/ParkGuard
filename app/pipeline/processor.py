@@ -8,6 +8,7 @@ temporal voting -> record -> ticket lookup (audit).
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import uuid
 from collections import Counter
@@ -33,7 +34,12 @@ from app.pipeline.geolocation import (
     VehiclePose,
 )
 from app.pipeline.plate_color import PlateType, classify_plate_color
-from app.pipeline.plate_validator import compact_plate, is_invalid_plate, normalize_plate
+from app.pipeline.plate_validator import (
+    compact_plate,
+    extract_county,
+    is_invalid_plate,
+    normalize_plate,
+)
 from app.services.parking_validation import validate_parking_at_location
 from app.services.ticket_lookup import lookup_ticket
 
@@ -298,6 +304,68 @@ def _best_ocr_candidate(
     return best_valid if best_valid.raw_text else best_any
 
 
+def _per_detection_ocr_sweep(
+    recognize: Recognizer,
+    crop: np.ndarray,
+    *,
+    detection_confidence: float,
+    plate_type: str | None,
+    ocr_angles: tuple[float, ...],
+    early_exit_conf: float,
+    min_sharpness: float,
+) -> OCRCandidate:
+    """Run the deskew + multi-angle / multi-pass OCR sweep for one detection.
+
+    Pulled out of the per-frame loop so the whole CPU-bound chain (deskew,
+    sharpness, motion-blur enhance, multi-angle OCR) can be dispatched with
+    a single ``asyncio.to_thread(...)`` call — concurrent sessions then
+    interleave their DB writes / SSE pushes on the event loop while their
+    crops are crunched in worker threads.
+    """
+    rectified = deskew_plate(crop)
+    if rectified.size == 0:
+        rectified = crop
+
+    angles_for_detection = (
+        (0.0,) if detection_confidence >= 0.85 else ocr_angles
+    )
+
+    sharpness = _sharpness_score(rectified)
+    if sharpness >= min_sharpness:
+        ocr_input = (
+            _enhance_motion_blur(rectified)
+            if sharpness < min_sharpness * 1.35
+            else rectified
+        )
+        sweep_candidate = _best_ocr_candidate(
+            recognize,
+            ocr_input,
+            ocr_angles=angles_for_detection,
+            plate_type=plate_type,
+            early_exit_conf=early_exit_conf,
+        )
+    else:
+        sweep_candidate = _best_ocr_candidate(
+            recognize,
+            crop,
+            ocr_angles=angles_for_detection,
+            plate_type=plate_type,
+            early_exit_conf=early_exit_conf,
+        )
+
+    if not sweep_candidate.raw_text:
+        fallback_candidate = _best_ocr_candidate(
+            recognize,
+            crop,
+            ocr_angles=ocr_angles,
+            plate_type=plate_type,
+            early_exit_conf=early_exit_conf,
+        )
+        sweep_candidate = _prefer_candidate(sweep_candidate, fallback_candidate)
+
+    return sweep_candidate
+
+
 def _track_is_stable(
     track: PlateTrack,
     *,
@@ -536,10 +604,18 @@ async def _get_or_create_plate(
     if plate is not None:
         plate.seen_count += 1
         plate.last_seen_at = datetime.now(UTC)
+        # Backfill county_code on existing rows that pre-date the registry
+        # filter — keeps the sidebar's county column populated without a
+        # migration script.
+        if plate.county_code is None:
+            plate.county_code = extract_county(normalized_text)
         await db.flush()
         return plate
 
-    plate = Plate(normalized_text=normalized_text)
+    plate = Plate(
+        normalized_text=normalized_text,
+        county_code=extract_county(normalized_text),
+    )
     db.add(plate)
     await db.flush()
     return plate
@@ -845,7 +921,13 @@ async def process_session(
                     session_id=str(session_id),
                 )
 
-            detections = detector.detect(frame_img, frame_index=frame_index)
+            # Dispatch the YOLO inference to a worker thread so other sessions'
+            # async work (DB writes, SSE pushes, frame reads) can interleave
+            # while this one's frame is being analysed.  Each session has its
+            # own ``detector`` instance so the model state is not shared.
+            detections = await asyncio.to_thread(
+                detector.detect, frame_img, frame_index=frame_index
+            )
             if not detections:
                 frames_processed += 1
                 session.frames_processed = frames_processed
@@ -896,7 +978,9 @@ async def process_session(
                 crop_filename = f"{frame.id}_{bbox_x}_{bbox_y}.jpg"
                 crop_relative_path = Path(str(session_id)) / crop_filename
                 crop_path = session_crops_dir / crop_filename
-                cv2.imwrite(str(crop_path), crop)
+                # Disk I/O off the event loop — even at 5–10 ms per crop this
+                # adds up across a long video and pins the loop.
+                await asyncio.to_thread(cv2.imwrite, str(crop_path), crop)
 
                 color_hint = classify_plate_color(crop)
                 plate_type_str: str | None = (
@@ -1134,11 +1218,18 @@ async def process_session(
             finalized_tracks,
         )
     except Exception as exc:
-        session.frames_processed = frames_processed
-        session.status = "failed"
-        session.error_message = str(exc)
-        session.ended_at = datetime.now(UTC)
-        await db.commit()
+        # When the failure originates inside a flush, the session sits in a
+        # rolled-back state — committing without rolling back first raises
+        # PendingRollbackError and the status update never lands, leaving the
+        # row stuck on "processing" and the frontend hanging on a dead task.
+        await db.rollback()
+        fresh_session = await db.get(Session, session_id)
+        if fresh_session is not None:
+            fresh_session.frames_processed = frames_processed
+            fresh_session.status = "failed"
+            fresh_session.error_message = str(exc)
+            fresh_session.ended_at = datetime.now(UTC)
+            await db.commit()
         publish(str(session_id), "session_failed", {"error": str(exc)})
         logger.exception("Session %s failed during processing", session_id)
         raise
