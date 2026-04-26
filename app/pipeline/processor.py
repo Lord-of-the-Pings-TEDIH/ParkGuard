@@ -22,6 +22,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
+from app.core.events import publish
 from app.models.detection import Detection, Frame, Plate, Session
 from app.pipeline.deskew import deskew_plate
 from app.pipeline.detector import PlateDetector
@@ -131,6 +132,22 @@ class Recognizer(Protocol):
     """Anything that turns a crop image into plate text (+ optional confidence)."""
 
     def __call__(self, crop: np.ndarray) -> RecognizerOutput: ...
+
+
+class BatchRecognizer(Protocol):
+    """Optional batched OCR — one call per frame instead of one per detection.
+
+    Implementations should return one ``(text, confidence)`` tuple per input
+    crop, in the same order, so the per-frame loop can pre-seed the candidate
+    for each detection without an extra Python/Paddle round-trip.
+    """
+
+    def __call__(
+        self,
+        crops: list[np.ndarray],
+        *,
+        plate_types: list[str | None] | None = None,
+    ) -> list[tuple[str, float]]: ...
 
 
 def _noop_ocr(crop: np.ndarray) -> RecognizerOutput:
@@ -302,8 +319,15 @@ def _track_is_stable(
         return False
     if track.best_confidence < min_confidence:
         return False
+    if not track.votes:
+        return False
     leading_votes = max(track.votes.values(), default=0)
-    return leading_votes >= min_votes
+    if leading_votes < min_votes:
+        return False
+    # Require ≥60% of votes on a single plate — prevents locking in a plate
+    # when OCR is split between two near-miss variants (e.g. CJ12ABC / CJ12ABG).
+    total_votes = sum(track.votes.values())
+    return (leading_votes / max(1, total_votes)) >= 0.60
 
 
 def _prefer_candidate(current: OCRCandidate, fallback: OCRCandidate) -> OCRCandidate:
@@ -486,10 +510,13 @@ def _track_best_plate(track: PlateTrack) -> tuple[str | None, int, float, float]
     if not track.votes:
         return None, 0, 0.0, 0.0
 
-    def _score(item: tuple[str, int]) -> tuple[int, float, str]:
+    def _score(item: tuple[str, int]) -> tuple[float, int, float, str]:
         plate, votes = item
-        avg_conf = track.conf_sums.get(plate, 0.0) / max(1, votes)
-        return votes, avg_conf, plate
+        conf_total = track.conf_sums.get(plate, 0.0)
+        avg_conf = conf_total / max(1, votes)
+        # Primary key: total accumulated confidence — 3 reads at 0.95 (2.85)
+        # beats 5 reads at 0.50 (2.50).  Ties broken by vote count then avg.
+        return conf_total, votes, avg_conf, plate
 
     best_plate, best_votes = max(track.votes.items(), key=_score)
     best_avg_conf = track.conf_sums.get(best_plate, 0.0) / max(1, best_votes)
@@ -566,6 +593,7 @@ async def _finalize_track_with_fallback(
     min_track_votes: int,
     finalized_registry: dict[str, tuple[int, float]],
     mobile_lpr: MobileLPRContext | None = None,
+    session_id: str | None = None,
 ) -> None:
     """Finalize unresolved tracks with the best-confidence valid plate.
 
@@ -657,8 +685,16 @@ async def _finalize_track_with_fallback(
         track_distance = None
         track_spot_id = None
 
+    # Fetch all detections for this track in one query instead of N individual
+    # db.get() calls — after the per-frame commits the identity map is expired,
+    # so each db.get() would otherwise hit the database separately.
+    batch_result = await db.execute(
+        select(Detection).where(Detection.id.in_(track.detection_ids))
+    )
+    detections_by_id = {d.id: d for d in batch_result.scalars().all()}
+
     for detection_id in track.detection_ids:
-        detection = await db.get(Detection, detection_id)
+        detection = detections_by_id.get(detection_id)
         if detection is None or detection.ticket_status is not None:
             continue
         detection.ocr_normalized_text = normalized
@@ -695,6 +731,9 @@ async def _finalize_track_with_fallback(
     await db.flush()
     track.finalized = True
 
+    if session_id is not None:
+        publish(session_id, "detection_finalized", {"plate": normalized})
+
     evidence_votes = best_votes if is_stable_choice else max(1, best_votes)
     evidence_avg_conf = (
         track.conf_sums.get(best_plate, 0.0) / max(1, best_votes)
@@ -711,6 +750,7 @@ async def process_session(
     db: AsyncSession,
     *,
     ocr: Recognizer | None = None,
+    ocr_batch: BatchRecognizer | None = None,
     zone_id: int | None = None,
     mobile_lpr: MobileLPRContext | None = None,
 ) -> None:
@@ -721,8 +761,15 @@ async def process_session(
     registered ``ParkingSpot`` rows; the resulting status/coords are stamped
     on every detection in the track.  Pass ``None`` for the static-camera
     flow (preserves existing behaviour).
+
+    When ``ocr_batch`` is provided AND a frame yields ≥2 non-stable detections,
+    a single batched OCR call covers them as a fast first pass.  Detections
+    that don't reach the early-exit confidence on the batch result fall back
+    to the existing per-detection multi-pass / multi-angle path, so accuracy
+    is preserved.
     """
     recognize = ocr or _noop_ocr
+    recognize_batch = ocr_batch
 
     session = await db.get(Session, session_id)
     if session is None:
@@ -795,6 +842,7 @@ async def process_session(
                     min_track_votes=min_track_votes,
                     finalized_registry=finalized_plate_registry,
                     mobile_lpr=mobile_lpr,
+                    session_id=str(session_id),
                 )
 
             detections = detector.detect(frame_img, frame_index=frame_index)
@@ -803,12 +851,23 @@ async def process_session(
                 session.frames_processed = frames_processed
                 if frames_processed % progress_commit_every == 0:
                     await db.commit()
+                    publish(str(session_id), "frame_processed", {
+                        "frames_processed": frames_processed,
+                        "total_frames": session.total_frames,
+                    })
                 continue
 
             frame = Frame(session_id=session_id, frame_index=frame_index, pts_ms=pts_ms)
             db.add(frame)
             await db.flush()
 
+            # ---- Per-frame staging ----
+            # Build the per-detection state up front so we can (optionally)
+            # fire one batched OCR call for the whole frame before the
+            # per-detection inner loop runs its multi-angle / multi-pass
+            # fallback.  This is the [B1] amortisation: when a frame contains
+            # 2+ non-stable plates, batching saves N-1 PaddleOCR round-trips.
+            staged: list[dict] = []  # one entry per kept detection
             for det in detections:
                 bbox_x, bbox_y, bbox_w, bbox_h = (
                     int(det["bbox"][0]),
@@ -827,8 +886,8 @@ async def process_session(
                     next_track_id=next_track_id,
                     min_iou=track_min_iou,
                 )
-                # Adaptive padding: proportional to bbox size, clamped [2, 8].
-                adaptive_pad = max(2, min(8, int(min(bbox_w, bbox_h) * 0.08)))
+                # Adaptive padding: proportional to bbox size, clamped [4, 16].
+                adaptive_pad = max(4, min(16, int(min(bbox_w, bbox_h) * 0.12)))
                 try:
                     crop = PlateDetector.crop_plate(frame_img, bbox, padding=adaptive_pad)
                 except ValueError:
@@ -839,65 +898,145 @@ async def process_session(
                 crop_path = session_crops_dir / crop_filename
                 cv2.imwrite(str(crop_path), crop)
 
-                # --- Color-based plate type classification ---
                 color_hint = classify_plate_color(crop)
                 plate_type_str: str | None = (
                     color_hint.value if color_hint != PlateType.UNKNOWN else None
                 )
 
-                # Skip OCR entirely once the track has already converged.
-                # The finalizer relabels every detection in the track with
-                # the canonical plate, so the per-frame OCR fields can stay
-                # empty for the post-stable detections without losing data.
+                # Once a track has converged we skip OCR entirely — the
+                # finalizer relabels every detection in the track anyway.
                 track_stable = skip_stable_tracks and _track_is_stable(
                     track,
                     min_votes=min_track_votes,
                     min_confidence=skip_stable_conf,
                 )
 
+                staged.append(
+                    {
+                        "bbox": bbox,
+                        "bbox_x": bbox_x,
+                        "bbox_y": bbox_y,
+                        "bbox_w": bbox_w,
+                        "bbox_h": bbox_h,
+                        "confidence": confidence,
+                        "crop": crop,
+                        "crop_relative_path": crop_relative_path,
+                        "track": track,
+                        "plate_type": plate_type_str,
+                        "track_stable": track_stable,
+                    }
+                )
+
+            # ---- Optional batched first-pass OCR ----
+            batch_results: dict[int, tuple[str, float]] = {}
+            if recognize_batch is not None:
+                batch_indices = [
+                    idx
+                    for idx, item in enumerate(staged)
+                    if not item["track_stable"]
+                ]
+                # Only worth batching when ≥2 crops share the call — a single
+                # crop pays the same overhead either way and avoids any risk
+                # from batch-API quirks.
+                if len(batch_indices) >= 2:
+                    batch_crops = [staged[idx]["crop"] for idx in batch_indices]
+                    batch_types = [staged[idx]["plate_type"] for idx in batch_indices]
+                    try:
+                        results = recognize_batch(
+                            batch_crops, plate_types=batch_types
+                        )
+                    except Exception as exc:
+                        logger.debug(
+                            "Frame %d batched OCR failed (%s); falling back to per-detection",
+                            frame_index, exc,
+                        )
+                        results = []
+                    if len(results) == len(batch_indices):
+                        for idx, payload in zip(batch_indices, results):
+                            batch_results[idx] = payload
+
+            # ---- Per-detection OCR + DB writes ----
+            for staged_idx, item in enumerate(staged):
+                bbox = item["bbox"]
+                bbox_x = item["bbox_x"]
+                bbox_y = item["bbox_y"]
+                bbox_w = item["bbox_w"]
+                bbox_h = item["bbox_h"]
+                confidence = item["confidence"]
+                crop = item["crop"]
+                crop_relative_path = item["crop_relative_path"]
+                track = item["track"]
+                plate_type_str = item["plate_type"]
+                track_stable = item["track_stable"]
+
                 candidate = OCRCandidate()
                 if not track_stable:
-                    rectified = deskew_plate(crop)
-                    if rectified.size == 0:
-                        rectified = crop
+                    # Step 1 — try the batched first-pass result if we have one.
+                    batched = batch_results.get(staged_idx)
+                    if batched is not None:
+                        raw_text, raw_conf = batched
+                        if raw_text:
+                            normalized = normalize_plate(raw_text, plate_type=plate_type_str)
+                            candidate = OCRCandidate(
+                                raw_text=raw_text,
+                                confidence=raw_conf,
+                                normalized=normalized,
+                                is_valid=not is_invalid_plate(normalized),
+                                angle=0.0,
+                            )
 
-                    sharpness = _sharpness_score(rectified)
-                    if sharpness >= min_sharpness:
-                        ocr_input = (
-                            _enhance_motion_blur(rectified)
-                            if sharpness < min_sharpness * 1.35
-                            else rectified
-                        )
-                        candidate = _best_ocr_candidate(
-                            recognize,
-                            ocr_input,
-                            ocr_angles=ocr_angles,
-                            plate_type=plate_type_str,
-                            early_exit_conf=early_exit_conf,
-                        )
-                    else:
-                        candidate = _best_ocr_candidate(
-                            recognize,
-                            crop,
-                            ocr_angles=ocr_angles,
-                            plate_type=plate_type_str,
-                            early_exit_conf=early_exit_conf,
+                    # Step 2 — fall back to the per-detection multi-angle /
+                    # deskew pass when the batched result was empty or didn't
+                    # clear the early-exit threshold.
+                    needs_fallback = not (
+                        candidate.is_valid
+                        and candidate.confidence >= early_exit_conf
+                    )
+                    if needs_fallback:
+                        rectified = deskew_plate(crop)
+                        if rectified.size == 0:
+                            rectified = crop
+
+                        angles_for_detection = (
+                            (0.0,) if confidence >= 0.85 else ocr_angles
                         )
 
-                    # Only retry on the raw crop when the rectified pass came
-                    # back genuinely empty.  Previously we re-ran the angle
-                    # sweep even on a partial result, doubling OCR work for
-                    # the no-ops.  The retry keeps the deskew-failure recovery
-                    # without paying for it on the happy path.
-                    if not candidate.raw_text:
-                        fallback_candidate = _best_ocr_candidate(
-                            recognize,
-                            crop,
-                            ocr_angles=ocr_angles,
-                            plate_type=plate_type_str,
-                            early_exit_conf=early_exit_conf,
-                        )
-                        candidate = _prefer_candidate(candidate, fallback_candidate)
+                        sharpness = _sharpness_score(rectified)
+                        if sharpness >= min_sharpness:
+                            ocr_input = (
+                                _enhance_motion_blur(rectified)
+                                if sharpness < min_sharpness * 1.35
+                                else rectified
+                            )
+                            sweep_candidate = _best_ocr_candidate(
+                                recognize,
+                                ocr_input,
+                                ocr_angles=angles_for_detection,
+                                plate_type=plate_type_str,
+                                early_exit_conf=early_exit_conf,
+                            )
+                        else:
+                            sweep_candidate = _best_ocr_candidate(
+                                recognize,
+                                crop,
+                                ocr_angles=angles_for_detection,
+                                plate_type=plate_type_str,
+                                early_exit_conf=early_exit_conf,
+                            )
+
+                        if not sweep_candidate.raw_text:
+                            fallback_candidate = _best_ocr_candidate(
+                                recognize,
+                                crop,
+                                ocr_angles=ocr_angles,
+                                plate_type=plate_type_str,
+                                early_exit_conf=early_exit_conf,
+                            )
+                            sweep_candidate = _prefer_candidate(
+                                sweep_candidate, fallback_candidate
+                            )
+
+                        candidate = _prefer_candidate(candidate, sweep_candidate)
 
                     if candidate.raw_text and candidate.confidence >= min_ocr_conf:
                         if candidate.is_valid:
@@ -960,6 +1099,10 @@ async def process_session(
             session.frames_processed = frames_processed
             if frames_processed % progress_commit_every == 0:
                 await db.commit()
+                publish(str(session_id), "frame_processed", {
+                    "frames_processed": frames_processed,
+                    "total_frames": session.total_frames,
+                })
 
         for track in all_tracks.values():
             await _finalize_track_with_fallback(
@@ -969,12 +1112,17 @@ async def process_session(
                 min_track_votes=min_track_votes,
                 finalized_registry=finalized_plate_registry,
                 mobile_lpr=mobile_lpr,
+                session_id=str(session_id),
             )
 
         session.frames_processed = frames_processed
         session.status = "completed"
         session.ended_at = datetime.now(UTC)
         await db.commit()
+        publish(str(session_id), "session_completed", {
+            "frames_processed": frames_processed,
+            "total_frames": session.total_frames,
+        })
 
         finalized_tracks = sum(
             1 for track in all_tracks.values() if _track_best_plate(track)[1] >= min_track_votes
@@ -991,5 +1139,6 @@ async def process_session(
         session.error_message = str(exc)
         session.ended_at = datetime.now(UTC)
         await db.commit()
+        publish(str(session_id), "session_failed", {"error": str(exc)})
         logger.exception("Session %s failed during processing", session_id)
         raise

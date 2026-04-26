@@ -18,6 +18,7 @@ import {
   getDetections,
   getHardcodedTestFiles,
   startSessionProcessing,
+  subscribeToSessionEvents,
 } from "../services/api";
 import type { Session, Detection, MobileLprPose } from "../types";
 
@@ -55,46 +56,67 @@ export function Dashboard() {
     fetchTestFiles();
   }, []);
 
-  // Polling for active session updates
+  // SSE subscription for live session updates — replaces 1 s polling.
   useEffect(() => {
     if (!activeSession || viewState !== "processing") return;
-    const activeSessionId = activeSession.id;
+    const sessionId = activeSession.id;
 
-    let lastFramesProcessed = activeSession.frames_processed;
+    const close = subscribeToSessionEvents(sessionId, {
+      onFrameProcessed: ({ frames_processed, total_frames }) => {
+        setActiveSession((prev) =>
+          prev
+            ? { ...prev, frames_processed, frames_total: total_frames ?? prev.frames_total }
+            : prev,
+        );
+        sessionCacheRef.current.set(sessionId, {
+          ...(sessionCacheRef.current.get(sessionId) ?? activeSession),
+          frames_processed,
+          frames_total: total_frames ?? activeSession.frames_total,
+        });
+      },
 
-    const pollInterval = setInterval(async () => {
-      try {
-        const updatedSession = await getSession(activeSessionId);
-
-        setActiveSession(updatedSession);
-        sessionCacheRef.current.set(updatedSession.id, updatedSession);
-        const shouldRefreshDetections =
-          updatedSession.frames_processed !== lastFramesProcessed ||
-          updatedSession.status === "done" ||
-          updatedSession.status === "failed";
-        if (shouldRefreshDetections) {
-          const currentDetections = await getDetections(activeSessionId);
+      onDetectionFinalized: async () => {
+        try {
+          const currentDetections = await getDetections(sessionId);
           setDetections(currentDetections);
-          detectionsCacheRef.current.set(activeSessionId, currentDetections);
-          lastFramesProcessed = updatedSession.frames_processed;
+          detectionsCacheRef.current.set(sessionId, currentDetections);
+        } catch (err) {
+          console.error("Failed to refresh detections:", err);
         }
+      },
 
-        // Stop polling when terminal state reached
-        if (updatedSession.status === "done" || updatedSession.status === "failed") {
-          clearInterval(pollInterval);
-          if (updatedSession.status === "done") {
-            setViewState("results");
-          }
-          // Refresh session list to update status
-          fetchSessions();
+      onCompleted: async ({ frames_processed, total_frames }) => {
+        try {
+          const updatedSession = await getSession(sessionId);
+          setActiveSession(updatedSession);
+          sessionCacheRef.current.set(sessionId, updatedSession);
+          const finalDetections = await getDetections(sessionId);
+          setDetections(finalDetections);
+          detectionsCacheRef.current.set(sessionId, finalDetections);
+        } catch (err) {
+          console.error("Failed to finalize session data:", err);
+          // Fall back to what the event told us.
+          setActiveSession((prev) =>
+            prev ? { ...prev, frames_processed, frames_total: total_frames ?? prev.frames_total, status: "done" } : prev,
+          );
         }
-      } catch (err) {
-        console.error("Polling error:", err);
-        setError(err instanceof Error ? err.message : "Polling failed");
-      }
-    }, 1000);
+        setViewState("results");
+        void fetchSessions();
+      },
 
-    return () => clearInterval(pollInterval);
+      onFailed: async () => {
+        try {
+          const updatedSession = await getSession(sessionId);
+          setActiveSession(updatedSession);
+          sessionCacheRef.current.set(sessionId, updatedSession);
+        } catch (err) {
+          console.error("Failed to refresh failed session:", err);
+        }
+        void fetchSessions();
+      },
+    });
+
+    return close;
   }, [activeSession?.id, viewState]);
 
   const fetchSessions = async () => {

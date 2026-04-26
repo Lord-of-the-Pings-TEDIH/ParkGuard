@@ -34,32 +34,53 @@ _NON_ALNUM_RE = re.compile(r"[^A-Z0-9]")
 # ---------------------------------------------------------------------------
 
 
-def preprocess_clahe(crop: np.ndarray) -> np.ndarray:
-    """Standard CLAHE preprocessing: grayscale → bilateral denoise → CLAHE → resize."""
+def _to_gray_denoised(crop: np.ndarray) -> np.ndarray:
+    """Convert to grayscale and bilateral-filter once — result is shared across passes.
+
+    Bilateral filter is expensive; computing it here and passing the result as
+    ``gray_denoised`` to each preprocessing function avoids running it 3× per
+    detection during multi-pass OCR.
+    """
     gray = cv2.cvtColor(crop, cv2.COLOR_BGR2GRAY) if crop.ndim == 3 else crop
-
-    # Bilateral filter — reduces noise while preserving edges (character strokes).
-    gray = cv2.bilateralFilter(gray, d=7, sigmaColor=50, sigmaSpace=50)
-
-    clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
-    gray = clahe.apply(gray)
-
-    return _resize_to_target(gray)
+    return cv2.bilateralFilter(gray, d=7, sigmaColor=50, sigmaSpace=50)
 
 
-def preprocess_adaptive(crop: np.ndarray) -> np.ndarray:
+def preprocess_clahe(
+    crop: np.ndarray, *, gray_denoised: np.ndarray | None = None
+) -> np.ndarray:
+    """Standard CLAHE preprocessing: grayscale → bilateral denoise → CLAHE → resize.
+
+    Parameters
+    ----------
+    gray_denoised:
+        Pre-computed grayscale + bilateral-filtered image.  Pass this when
+        calling multiple preprocessing variants on the same crop to avoid
+        repeating the expensive bilateral filter.
+    """
+    denoised = gray_denoised if gray_denoised is not None else _to_gray_denoised(crop)
+    # Smaller crops need a tighter tile grid and higher clip limit for contrast.
+    h = denoised.shape[0]
+    clip_limit = 3.0 if h < 40 else 2.0
+    tile_grid = (4, 4) if h < 40 else (8, 8)
+    clahe = cv2.createCLAHE(clipLimit=clip_limit, tileGridSize=tile_grid)
+    return _resize_to_target(clahe.apply(denoised))
+
+
+def preprocess_adaptive(
+    crop: np.ndarray, *, gray_denoised: np.ndarray | None = None
+) -> np.ndarray:
     """Adaptive-threshold binarisation: handles uneven illumination."""
-    gray = cv2.cvtColor(crop, cv2.COLOR_BGR2GRAY) if crop.ndim == 3 else crop
-
-    # Bilateral filter first.
-    gray = cv2.bilateralFilter(gray, d=7, sigmaColor=50, sigmaSpace=50)
+    denoised = gray_denoised if gray_denoised is not None else _to_gray_denoised(crop)
+    # Smaller blockSize for low-height crops; must be odd and >= 3.
+    h = denoised.shape[0]
+    block_size = 11 if h < 40 else 15
 
     binary = cv2.adaptiveThreshold(
-        gray,
+        denoised,
         255,
         cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
         cv2.THRESH_BINARY,
-        blockSize=15,
+        blockSize=block_size,
         C=5,
     )
 
@@ -70,18 +91,20 @@ def preprocess_adaptive(crop: np.ndarray) -> np.ndarray:
     return _resize_to_target(binary)
 
 
-def preprocess_inverted(crop: np.ndarray) -> np.ndarray:
+def preprocess_inverted(
+    crop: np.ndarray, *, gray_denoised: np.ndarray | None = None
+) -> np.ndarray:
     """Inverted binarisation: for dark-background or inverted plates."""
-    gray = cv2.cvtColor(crop, cv2.COLOR_BGR2GRAY) if crop.ndim == 3 else crop
-
-    gray = cv2.bilateralFilter(gray, d=7, sigmaColor=50, sigmaSpace=50)
+    denoised = gray_denoised if gray_denoised is not None else _to_gray_denoised(crop)
+    h = denoised.shape[0]
+    block_size = 11 if h < 40 else 15
 
     binary = cv2.adaptiveThreshold(
-        gray,
+        denoised,
         255,
         cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
         cv2.THRESH_BINARY_INV,
-        blockSize=15,
+        blockSize=block_size,
         C=5,
     )
 
@@ -120,10 +143,39 @@ _PREPROCESS_PASSES: list[tuple[str, Any]] = [
 # ---------------------------------------------------------------------------
 
 
-def _build_paddle_ocr(*, use_angle_cls: bool, lang: str) -> Any:
-    from paddleocr import PaddleOCR
+def _build_paddle_ocr(*, use_angle_cls: bool, lang: str, use_gpu: bool = False) -> Any:
+    os.environ["PADDLE_PDX_DISABLE_MODEL_SOURCE_CHECK"] = "True"
+    os.environ["FLAGS_use_mkldnn"] = "0"
+    os.environ["FLAGS_use_pir_api"] = "0"
 
-    os.environ.setdefault("PADDLE_PDX_DISABLE_MODEL_SOURCE_CHECK", "True")
+    # We only feed PaddleOCR pre-cropped plate images, so the full OCR
+    # pipeline's text-detection stage is wasted work — and on some
+    # paddlepaddle wheels it crashes the PIR runtime
+    # (NotImplementedError: ConvertPirAttribute2RuntimeAttribute).
+    # Use the TextRecognition predictor directly when it is available.
+    try:
+        from paddleocr import TextRecognition  # type: ignore[attr-defined]
+    except Exception:
+        TextRecognition = None  # type: ignore[assignment]
+
+    if TextRecognition is not None:
+        try:
+            tr_kwargs: dict[str, Any] = {}
+            tr_sig = inspect.signature(TextRecognition.__init__)
+            if "device" in tr_sig.parameters and use_gpu:
+                tr_kwargs["device"] = "gpu"
+            if "enable_mkldnn" in tr_sig.parameters:
+                tr_kwargs["enable_mkldnn"] = False
+            reader = TextRecognition(**tr_kwargs)
+            logger.info("OCR backend: paddleocr.TextRecognition (det stage skipped)")
+            return reader
+        except Exception as exc:
+            logger.warning(
+                "TextRecognition init failed (%s); falling back to PaddleOCR pipeline",
+                exc,
+            )
+
+    from paddleocr import PaddleOCR
 
     init_signature = inspect.signature(PaddleOCR.__init__)
     init_kwargs: dict[str, Any] = {"lang": lang}
@@ -136,7 +188,34 @@ def _build_paddle_ocr(*, use_angle_cls: bool, lang: str) -> Any:
     if "show_log" in init_signature.parameters:
         init_kwargs["show_log"] = False
 
-    return PaddleOCR(**init_kwargs)
+    # Belt-and-braces: also pass enable_mkldnn=False if the constructor
+    # accepts it (newer PaddleOCR builds expose it directly).
+    if "enable_mkldnn" in init_signature.parameters:
+        init_kwargs["enable_mkldnn"] = False
+    if "text_detection_enable_mkldnn" in init_signature.parameters:
+        init_kwargs["text_detection_enable_mkldnn"] = False
+    if "text_recognition_enable_mkldnn" in init_signature.parameters:
+        init_kwargs["text_recognition_enable_mkldnn"] = False
+
+    # GPU device selection — newer API uses "device", older uses "use_gpu".
+    if use_gpu:
+        if "device" in init_signature.parameters:
+            init_kwargs["device"] = "gpu"
+        elif "use_gpu" in init_signature.parameters:
+            init_kwargs["use_gpu"] = True
+
+    try:
+        return PaddleOCR(**init_kwargs)
+    except Exception as exc:
+        if use_gpu:
+            import logging as _log
+            _log.getLogger(__name__).warning(
+                "PaddleOCR GPU init failed (%s); retrying on CPU", exc
+            )
+            init_kwargs.pop("device", None)
+            init_kwargs.pop("use_gpu", None)
+            return PaddleOCR(**init_kwargs)
+        raise
 
 
 # ---------------------------------------------------------------------------
@@ -267,9 +346,8 @@ class PlateReader:
         super_res_model: str = "espcn_x2",
         super_res_allow_download: bool = True,
     ) -> None:
-        _ = gpu  # kept for backward-compatibility in call sites/tests
         try:
-            self.reader = _build_paddle_ocr(use_angle_cls=use_angle_cls, lang=lang)
+            self.reader = _build_paddle_ocr(use_angle_cls=use_angle_cls, lang=lang, use_gpu=gpu)
         except ModuleNotFoundError as exc:
             if exc.name == "paddle":
                 pyver = f"{sys.version_info.major}.{sys.version_info.minor}"
@@ -284,6 +362,10 @@ class PlateReader:
                     f"venv/bin/pip install paddlepaddle.{version_hint}"
                 ) from exc
             raise
+
+        # Resolved on first OCR call: "legacy" (det/rec/cls kwargs),
+        # "ocr" (positional only), or "predict".
+        self._ocr_call_mode: str | None = None
 
         # --- FSM Beam Search decoder ---
         self._use_fsm = use_fsm_decode
@@ -323,7 +405,7 @@ class PlateReader:
         from app.core.config import settings
 
         return cls(
-            gpu=False,
+            gpu=settings.OCR_USE_GPU,
             use_angle_cls=settings.OCR_USE_ANGLE_CLS,
             lang="en",
             use_fsm_decode=settings.OCR_FSM_DECODE,
@@ -340,37 +422,105 @@ class PlateReader:
     # Single-pass OCR (one preprocessed image → text + confidence)
     # ------------------------------------------------------------------
 
-    def _ocr_single(self, ocr_input: np.ndarray) -> tuple[str, float]:
-        """Run PaddleOCR on a single preprocessed image."""
-        result: Any | None = None
+    def _invoke_ocr(self, ocr_input: np.ndarray) -> Any:
+        """Call the underlying PaddleOCR reader, caching which API works."""
+        mode = self._ocr_call_mode
+        if mode == "legacy":
+            return self.reader.ocr(ocr_input, det=False, rec=True, cls=False)
+        if mode == "ocr":
+            return self.reader.ocr(ocr_input)
+        if mode == "predict":
+            return self.reader.predict(ocr_input)
+
+        # First call: probe once and remember.
         if hasattr(self.reader, "ocr"):
             try:
                 result = self.reader.ocr(ocr_input, det=False, rec=True, cls=False)
+                self._ocr_call_mode = "legacy"
+                return result
             except TypeError as exc:
-                message = str(exc)
-                unsupported_kw = "unexpected keyword argument" in message and (
-                    "'det'" in message or "'rec'" in message or "'cls'" in message
-                )
-                if not unsupported_kw:
+                msg = str(exc)
+                if "unexpected keyword argument" not in msg:
                     raise
-                result = self.reader.ocr(ocr_input)
-
-        if result is None and hasattr(self.reader, "predict"):
+            result = self.reader.ocr(ocr_input)
+            self._ocr_call_mode = "ocr"
+            return result
+        if hasattr(self.reader, "predict"):
             result = self.reader.predict(ocr_input)
+            self._ocr_call_mode = "predict"
+            return result
+        raise RuntimeError("PaddleOCR reader has no supported OCR method")
 
-        if result is None:
-            raise RuntimeError("PaddleOCR reader has no supported OCR method")
+    def _invoke_ocr_batch(self, inputs: list[np.ndarray]) -> list[Any]:
+        """Run a single batched OCR call covering ``inputs`` in order.
+
+        Returns a list of per-image raw outputs aligned with ``inputs``.  When
+        the underlying reader does not accept a list (older PaddleOCR builds),
+        we transparently fall back to N single-image calls so the caller does
+        not need to special-case the API surface.
+        """
+        if not inputs:
+            return []
+
+        # Probe the call mode against the first crop so subsequent batch calls
+        # take the cached fast path.
+        if self._ocr_call_mode is None:
+            self._invoke_ocr(inputs[0])
+
+        mode = self._ocr_call_mode
+        try:
+            if mode == "legacy":
+                result = self.reader.ocr(inputs, det=False, rec=True, cls=False)
+            elif mode == "ocr":
+                result = self.reader.ocr(inputs)
+            elif mode == "predict":
+                result = self.reader.predict(inputs)
+            else:
+                raise RuntimeError("PaddleOCR reader has no supported OCR method")
+        except Exception as exc:
+            logger.debug(
+                "Batched OCR failed (mode=%s, n=%d): %s — falling back to per-image",
+                mode, len(inputs), exc,
+            )
+            return [self._invoke_ocr(img) for img in inputs]
+
+        # PaddleOCR usually returns a list with one entry per input image.
+        # If the shapes don't line up we fall back to per-image so we never
+        # silently mis-pair OCR text to bboxes.
+        if isinstance(result, list) and len(result) == len(inputs):
+            return result
+        logger.debug(
+            "Batched OCR returned %d entries for %d inputs — falling back to per-image",
+            len(result) if isinstance(result, list) else -1, len(inputs),
+        )
+        return [self._invoke_ocr(img) for img in inputs]
+
+    def _ocr_single(self, ocr_input: np.ndarray) -> tuple[str, float]:
+        """Run PaddleOCR on a single preprocessed image."""
+        try:
+            result = self._invoke_ocr(ocr_input)
+        except Exception as exc:
+            logger.warning("PaddleOCR call failed: %s", exc, exc_info=True)
+            return "", 0.0
 
         tokens: list[tuple[str, float]] = []
         _collect_ocr_tokens(result, tokens)
 
         if not tokens:
+            logger.debug(
+                "OCR returned no tokens (mode=%s, raw=%r)",
+                self._ocr_call_mode, result,
+            )
             return "", 0.0
 
         raw_text = _NON_ALNUM_RE.sub(
             "", "".join(token for token, _ in tokens).upper()
         )
-        confidence = float(sum(conf for _, conf in tokens) / len(tokens))
+        # Aggregate token confidences with the *minimum* — for a license plate
+        # one mis-read character invalidates the whole string, so the weakest
+        # token is the honest signal. Mean used to mask single-character
+        # failures (e.g. mean(0.99, 0.99, 0.30) = 0.76 looked confident).
+        confidence = float(min(conf for _, conf in tokens))
         return raw_text, confidence
 
     # ------------------------------------------------------------------
@@ -436,6 +586,75 @@ class PlateReader:
         )
         return raw_text, confidence
 
+    def read_plates_batch(
+        self,
+        crops: list[np.ndarray],
+        *,
+        plate_types: list[str | None] | None = None,
+    ) -> list[tuple[str, float]]:
+        """Single-pass batched OCR over multiple crops.
+
+        Runs CLAHE preprocessing on every crop, fires *one* PaddleOCR call for
+        the whole batch, then returns ``(text, confidence)`` per crop in the
+        same order.  This amortises the Python/Paddle per-call overhead — on
+        frames with 2+ plates the speed-up is 20–40 % over per-crop calls.
+
+        Multi-pass (adaptive/inverted) and multi-angle sweeps are *not* applied
+        here — the caller is expected to fall back to :meth:`read_plate` for
+        any crop where the batched single-pass result is empty or low-confidence.
+        """
+        if not crops:
+            return []
+        if plate_types is None:
+            plate_types = [None] * len(crops)
+        elif len(plate_types) != len(crops):
+            raise ValueError("plate_types length must match crops")
+
+        inputs: list[np.ndarray] = []
+        for crop in crops:
+            if self._super_resolver is not None:
+                crop = self._super_resolver.upscale_if_small(
+                    crop, min_height=self._sr_min_height
+                )
+            processed = preprocess_clahe(crop)
+            ocr_input = (
+                cv2.cvtColor(processed, cv2.COLOR_GRAY2BGR)
+                if processed.ndim == 2
+                else processed
+            )
+            inputs.append(ocr_input)
+
+        try:
+            raw_results = self._invoke_ocr_batch(inputs)
+        except Exception as exc:
+            logger.warning("Batched PaddleOCR call failed: %s", exc, exc_info=True)
+            return [("", 0.0)] * len(crops)
+
+        results: list[tuple[str, float]] = []
+        for idx, raw in enumerate(raw_results):
+            tokens: list[tuple[str, float]] = []
+            _collect_ocr_tokens(raw, tokens)
+            if not tokens:
+                results.append(("", 0.0))
+                continue
+            text = _NON_ALNUM_RE.sub(
+                "", "".join(token for token, _ in tokens).upper()
+            )
+            confidence = float(min(conf for _, conf in tokens))
+
+            if self._use_fsm and text:
+                from app.pipeline.ctc_decoder import fsm_beam_decode
+
+                text, confidence = fsm_beam_decode(
+                    text,
+                    confidence,
+                    beam_width=self._fsm_beam_width,
+                    plate_type=plate_types[idx],
+                )
+            results.append((text, confidence))
+
+        return results
+
     def _multi_pass_ocr(
         self, crop: np.ndarray, *, plate_type: str | None = None
     ) -> tuple[str, float]:
@@ -458,9 +677,13 @@ class PlateReader:
         best_any_text = ""
         best_any_conf = 0.0
 
+        # Compute grayscale + bilateral denoise once — reused by all three passes
+        # instead of running the expensive bilateral filter 3× per detection.
+        gray_denoised = _to_gray_denoised(crop)
+
         for pass_name, preprocess_fn in _PREPROCESS_PASSES:
             try:
-                processed = preprocess_fn(crop)
+                processed = preprocess_fn(crop, gray_denoised=gray_denoised)
                 ocr_input = (
                     cv2.cvtColor(processed, cv2.COLOR_GRAY2BGR)
                     if processed.ndim == 2

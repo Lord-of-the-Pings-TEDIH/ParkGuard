@@ -113,7 +113,7 @@ class PlateDetector:
         if xyxy is None or cls_id_val is None or conf_val is None:
             return None
 
-        coords = np.asarray(xyxy)
+        coords = np.asarray(xyxy.cpu() if hasattr(xyxy, "cpu") else xyxy)
         if coords.size < 4:
             return None
         flat = coords.reshape(-1)

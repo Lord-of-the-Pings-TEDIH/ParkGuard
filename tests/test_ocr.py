@@ -21,7 +21,7 @@ def _synthetic_crop(height: int = 60, width: int = 200) -> np.ndarray:
     return crop
 
 
-def test_read_plate_normalizes_text_and_averages_confidence(
+def test_read_plate_normalizes_text_and_takes_min_confidence(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     fake_reader = _FakePaddleReader(
@@ -37,7 +37,7 @@ def test_read_plate_normalizes_text_and_averages_confidence(
     text, confidence = plate_reader.read_plate(_synthetic_crop())
 
     assert text == "B12ABC"
-    assert confidence == pytest.approx(0.8)
+    assert confidence == pytest.approx(0.7)
 
 
 def test_read_plate_returns_empty_when_no_tokens(
