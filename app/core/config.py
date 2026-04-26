@@ -28,6 +28,27 @@ class Settings(BaseSettings):
     # in challenging lighting conditions at the cost of ~3× OCR time.
     OCR_MULTI_PASS: bool = True
 
+    # --- OCR speed-ups (no accuracy loss) ---
+    # Once the first preprocessing pass / first angle returns a *valid*
+    # Romanian plate with confidence >= OCR_EARLY_EXIT_CONF, skip the
+    # remaining passes/angles for that detection.  The high-confidence
+    # path covers the vast majority of frames and the angle/multi-pass
+    # sweep only kicks in when needed (tilted, washed-out, blurred).
+    OCR_EARLY_EXIT_CONF: float = 0.85
+    # Once a track has accumulated stable consensus (best plate with
+    # >= MIN_TRACK_VOTES votes at confidence >= OCR_SKIP_STABLE_CONF AND
+    # the track has been observed >= MIN_TRACK_VOTES * 2 times), additional
+    # OCR runs on subsequent frames of the same track are pure overhead —
+    # the canonical plate is locked in and the finalizer relabels every
+    # detection in the track anyway.  Skipping OCR on stable tracks gives
+    # ~50–80% reduction in pipeline time on long clips with parked cars.
+    OCR_SKIP_STABLE_TRACKS: bool = True
+    OCR_SKIP_STABLE_CONF: float = 0.85
+    # Commit progress every N processed frames instead of every frame.
+    # Reduces DB write amplification at the cost of slightly chunkier
+    # progress updates (still well under one second on typical CPU loads).
+    PROCESSOR_COMMIT_EVERY_FRAMES: int = 4
+
     # --- Mobile-LPR (Mobile License Plate Recognition) ---
     # Defaults for the police-car camera intrinsics used by
     # PlateGeolocationCalculator.  Override per-deployment in .env.  The

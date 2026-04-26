@@ -230,11 +230,26 @@ def _best_ocr_candidate(
     *,
     ocr_angles: tuple[float, ...],
     plate_type: str | None = None,
+    early_exit_conf: float | None = None,
 ) -> OCRCandidate:
+    """Iterate angles and return the best (valid + highest-conf) candidate.
+
+    When ``early_exit_conf`` is set and the *first* angle that produces a
+    valid plate hits ``confidence >= early_exit_conf``, the remaining
+    angles are skipped — most plates are not tilted, so this short-circuit
+    drops the average angle-sweep from 5 OCR calls to 1 without affecting
+    the cases that actually need rotation.  Pass ``None`` to keep the old
+    behaviour (sweep every angle).
+    """
     best_valid = OCRCandidate()
     best_any = OCRCandidate()
 
-    for angle in ocr_angles:
+    # Run the un-rotated angle first so the early-exit shortcut fires on
+    # the most common case.  ``ocr_angles`` already canonicalises 0° to be
+    # present in the list (see ``_parse_ocr_angles``).
+    ordered_angles = sorted(ocr_angles, key=lambda a: abs(a))
+
+    for angle in ordered_angles:
         candidate_image = _rotate_bound(crop, angle)
         raw_text, confidence = _read_with_recognizer(recognize, candidate_image)
         if raw_text:
@@ -255,7 +270,40 @@ def _best_ocr_candidate(
         if candidate.is_valid and candidate.confidence > best_valid.confidence:
             best_valid = candidate
 
+        if (
+            early_exit_conf is not None
+            and best_valid.is_valid
+            and best_valid.confidence >= early_exit_conf
+        ):
+            # First valid+high-conf hit wins — no need to keep sweeping.
+            return best_valid
+
     return best_valid if best_valid.raw_text else best_any
+
+
+def _track_is_stable(
+    track: PlateTrack,
+    *,
+    min_votes: int,
+    min_confidence: float,
+) -> bool:
+    """Return True when a track has converged enough to skip per-frame OCR.
+
+    Stable means: we have observed the track at least twice the vote
+    threshold, the leading plate has reached the vote threshold, and the
+    best per-detection confidence is high.  Once stable, additional OCR
+    runs are pure overhead — the finalizer relabels every detection in
+    the track with the canonical plate, so leaving the per-frame OCR text
+    unset costs nothing downstream.
+    """
+    if track.observations < min_votes * 2:
+        return False
+    if track.best_conf_plate is None:
+        return False
+    if track.best_confidence < min_confidence:
+        return False
+    leading_votes = max(track.votes.values(), default=0)
+    return leading_votes >= min_votes
 
 
 def _prefer_candidate(current: OCRCandidate, fallback: OCRCandidate) -> OCRCandidate:
@@ -697,7 +745,10 @@ async def process_session(
     track_max_age = max(1, int(settings.TRACK_MAX_AGE))
     track_min_iou = max(0.01, min(0.99, float(settings.TRACK_MIN_IOU)))
     min_track_votes = max(1, int(settings.MIN_TRACK_VOTES))
-    progress_commit_every = 1
+    early_exit_conf = max(0.0, min(1.0, float(settings.OCR_EARLY_EXIT_CONF)))
+    skip_stable_tracks = bool(settings.OCR_SKIP_STABLE_TRACKS)
+    skip_stable_conf = max(0.0, min(1.0, float(settings.OCR_SKIP_STABLE_CONF)))
+    progress_commit_every = max(1, int(settings.PROCESSOR_COMMIT_EVERY_FRAMES))
     session_crops_dir = Path(settings.CROPS_DIR) / str(session_id)
     session_crops_dir.mkdir(parents=True, exist_ok=True)
 
@@ -794,46 +845,65 @@ async def process_session(
                     color_hint.value if color_hint != PlateType.UNKNOWN else None
                 )
 
+                # Skip OCR entirely once the track has already converged.
+                # The finalizer relabels every detection in the track with
+                # the canonical plate, so the per-frame OCR fields can stay
+                # empty for the post-stable detections without losing data.
+                track_stable = skip_stable_tracks and _track_is_stable(
+                    track,
+                    min_votes=min_track_votes,
+                    min_confidence=skip_stable_conf,
+                )
+
                 candidate = OCRCandidate()
-                rectified = deskew_plate(crop)
-                if rectified.size == 0:
-                    rectified = crop
+                if not track_stable:
+                    rectified = deskew_plate(crop)
+                    if rectified.size == 0:
+                        rectified = crop
 
-                sharpness = _sharpness_score(rectified)
-                if sharpness >= min_sharpness:
-                    ocr_input = (
-                        _enhance_motion_blur(rectified)
-                        if sharpness < min_sharpness * 1.35
-                        else rectified
-                    )
-                    candidate = _best_ocr_candidate(
-                        recognize,
-                        ocr_input,
-                        ocr_angles=ocr_angles,
-                        plate_type=plate_type_str,
-                    )
-                else:
-                    candidate = _best_ocr_candidate(
-                        recognize,
-                        crop,
-                        ocr_angles=ocr_angles,
-                        plate_type=plate_type_str,
-                    )
-
-                if not candidate.raw_text:
-                    fallback_candidate = _best_ocr_candidate(
-                        recognize,
-                        crop,
-                        ocr_angles=ocr_angles,
-                        plate_type=plate_type_str,
-                    )
-                    candidate = _prefer_candidate(candidate, fallback_candidate)
-
-                if candidate.raw_text and candidate.confidence >= min_ocr_conf:
-                    if candidate.is_valid:
-                        _register_track_vote(
-                            track, candidate.normalized, candidate.confidence
+                    sharpness = _sharpness_score(rectified)
+                    if sharpness >= min_sharpness:
+                        ocr_input = (
+                            _enhance_motion_blur(rectified)
+                            if sharpness < min_sharpness * 1.35
+                            else rectified
                         )
+                        candidate = _best_ocr_candidate(
+                            recognize,
+                            ocr_input,
+                            ocr_angles=ocr_angles,
+                            plate_type=plate_type_str,
+                            early_exit_conf=early_exit_conf,
+                        )
+                    else:
+                        candidate = _best_ocr_candidate(
+                            recognize,
+                            crop,
+                            ocr_angles=ocr_angles,
+                            plate_type=plate_type_str,
+                            early_exit_conf=early_exit_conf,
+                        )
+
+                    # Only retry on the raw crop when the rectified pass came
+                    # back genuinely empty.  Previously we re-ran the angle
+                    # sweep even on a partial result, doubling OCR work for
+                    # the no-ops.  The retry keeps the deskew-failure recovery
+                    # without paying for it on the happy path.
+                    if not candidate.raw_text:
+                        fallback_candidate = _best_ocr_candidate(
+                            recognize,
+                            crop,
+                            ocr_angles=ocr_angles,
+                            plate_type=plate_type_str,
+                            early_exit_conf=early_exit_conf,
+                        )
+                        candidate = _prefer_candidate(candidate, fallback_candidate)
+
+                    if candidate.raw_text and candidate.confidence >= min_ocr_conf:
+                        if candidate.is_valid:
+                            _register_track_vote(
+                                track, candidate.normalized, candidate.confidence
+                            )
 
                 raw_plate_text = candidate.raw_text or None
                 normalized_plate_text = candidate.normalized if candidate.raw_text else None

@@ -49,6 +49,16 @@ class Session(Base):
     gps_longitude: Mapped[float | None] = mapped_column(Float, nullable=True)
     gps_heading_deg: Mapped[float | None] = mapped_column(Float, nullable=True)
 
+    # GPS provenance + quality so the UI can show where the pose came from
+    # ("explicit"/"video_metadata"/"config_default") and any soft-validation
+    # warnings raised while resolving it.  ``gps_accuracy_m`` is the
+    # horizontal-accuracy estimate in metres (when available from the video
+    # container — iOS 11+).  All fields nullable for static-camera sessions.
+    gps_source: Mapped[str | None] = mapped_column(String(30), nullable=True)
+    gps_accuracy_m: Mapped[float | None] = mapped_column(Float, nullable=True)
+    gps_validation_status: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    gps_validation_warnings: Mapped[str | None] = mapped_column(Text, nullable=True)
+
     # Relationships
     frames: Mapped[list["Frame"]] = relationship(
         back_populates="session", cascade="all, delete-orphan"

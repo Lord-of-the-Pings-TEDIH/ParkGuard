@@ -21,7 +21,17 @@ from app.pipeline.ocr import PlateReader
 from app.pipeline.processor import build_mobile_lpr_context, process_session
 from app.schemas.detection import DetectionOut, SessionOut
 from app.pipeline.frame_extractor import get_video_info
-from app.pipeline.video_metadata import extract_video_gps
+from app.pipeline.gps_validation import (
+    GpsSource,
+    GpsValidationError,
+    GpsValidationStatus,
+    ResolvedGpsPose,
+    ValidatedCoordinates,
+    cross_validate_sources,
+    validate_coordinates,
+    validate_heading,
+)
+from app.pipeline.video_metadata import MediaGpsMetadata, extract_media_gps_metadata
 
 router = APIRouter()
 _plate_reader: PlateReader | None = None
@@ -152,45 +162,94 @@ async def list_sessions(db: AsyncSession = Depends(get_db)):
     return sessions
 
 
-def _default_gps_pose() -> tuple[float | None, float | None, float | None]:
-    """Return the configured default Mobile-LPR pose, if all three are set.
-
-    When MOBILE_LPR_DEFAULT_LATITUDE / LONGITUDE / HEADING_DEG are all
-    configured in .env, every session created without an explicit pose falls
-    back to these defaults so the GPS projection runs and per-car coordinates
-    appear in the UI.  Returns ``(None, None, None)`` if any default is unset.
-    """
-    lat = settings.MOBILE_LPR_DEFAULT_LATITUDE
-    lon = settings.MOBILE_LPR_DEFAULT_LONGITUDE
-    heading = settings.MOBILE_LPR_DEFAULT_HEADING_DEG
-    if lat is None or lon is None or heading is None:
-        return (None, None, None)
-    return (float(lat), float(lon), float(heading) % 360.0)
-
-
-def _validate_explicit_gps_pose(
+def _validated_explicit_pose(
     lat: float | None, lon: float | None, heading: float | None
-) -> tuple[float | None, float | None, float | None]:
-    """Validate user-provided GPS pose form fields.
+) -> tuple[float, float, float] | None:
+    """Validate explicit form-supplied lat/lon/heading.
 
     Mobile-LPR mode is all-or-nothing: a partial pose would silently disable
-    spot validation in the pipeline and the user would never know why.
-    Returns ``(None, None, None)`` when nothing was supplied (so the caller
-    can decide whether to fall back to video metadata or config defaults).
+    spot validation and the user would never know why.  Returns ``None`` when
+    no explicit pose was supplied; raises ``HTTPException(400)`` for any
+    validation error so the operator gets immediate feedback.
     """
     provided = [v for v in (lat, lon, heading) if v is not None]
     if not provided:
-        return (None, None, None)
+        return None
     if len(provided) != 3:
         raise HTTPException(
             status_code=400,
             detail="Mobile-LPR requires gps_latitude, gps_longitude and gps_heading_deg together.",
         )
-    if not (-90.0 <= float(lat) <= 90.0):  # type: ignore[arg-type]
-        raise HTTPException(status_code=400, detail="gps_latitude out of range")
-    if not (-180.0 <= float(lon) <= 180.0):  # type: ignore[arg-type]
-        raise HTTPException(status_code=400, detail="gps_longitude out of range")
-    return (float(lat), float(lon), float(heading) % 360.0)  # type: ignore[arg-type]
+    try:
+        coords = validate_coordinates(lat, lon)  # type: ignore[arg-type]
+        heading_norm = validate_heading(heading)  # type: ignore[arg-type]
+    except GpsValidationError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return (coords.latitude, coords.longitude, heading_norm)
+
+
+def _validated_metadata_pose(
+    metadata: MediaGpsMetadata | None,
+) -> tuple[MediaGpsMetadata, list[str]] | None:
+    """Validate GPS embedded in the video container.
+
+    Returns ``(metadata, warnings)`` when the fix is usable.  Returns
+    ``None`` when the container had no GPS or the GPS failed any hard
+    rule — the caller falls back to the next provenance source (config
+    default) rather than aborting upload.  Soft warnings (e.g. low
+    accuracy) are surfaced through the warnings list.
+    """
+    if metadata is None:
+        return None
+    try:
+        validate_coordinates(metadata.latitude, metadata.longitude)
+    except GpsValidationError as exc:
+        logger.info(
+            "Discarding video-metadata GPS (%s, %s): %s",
+            metadata.latitude,
+            metadata.longitude,
+            exc,
+        )
+        return None
+
+    warnings: list[str] = []
+    # iOS' horizontal-accuracy estimate is in metres — anything beyond ~25 m
+    # (consumer GPS in an urban canyon) is too coarse for a 3 m parking-spot
+    # match radius, so we keep it but warn.
+    if metadata.accuracy_m is not None and metadata.accuracy_m > 25.0:
+        warnings.append(
+            f"video metadata GPS accuracy {metadata.accuracy_m:.1f} m "
+            "exceeds 25 m — projected spot match may be unreliable"
+        )
+    return (metadata, warnings)
+
+
+def _validated_default_pose() -> tuple[float, float, float] | None:
+    """Validate the configured ``MOBILE_LPR_DEFAULT_*`` fallback pose.
+
+    The defaults bypass the API layer, so we cannot rely on the form
+    validators — apply the same hard rules here.  An invalid default is
+    a deployment misconfiguration; we log loudly and fall back to "no
+    pose" rather than projecting plates to nonsense.
+    """
+    lat = settings.MOBILE_LPR_DEFAULT_LATITUDE
+    lon = settings.MOBILE_LPR_DEFAULT_LONGITUDE
+    heading = settings.MOBILE_LPR_DEFAULT_HEADING_DEG
+    if lat is None or lon is None or heading is None:
+        return None
+    try:
+        coords = validate_coordinates(float(lat), float(lon))
+        heading_norm = validate_heading(float(heading))
+    except GpsValidationError as exc:
+        logger.error(
+            "MOBILE_LPR_DEFAULT_* configuration is invalid (%s, %s, %s): %s",
+            lat,
+            lon,
+            heading,
+            exc,
+        )
+        return None
+    return (coords.latitude, coords.longitude, heading_norm)
 
 
 def _resolve_session_pose(
@@ -199,7 +258,7 @@ def _resolve_session_pose(
     explicit_lon: float | None,
     explicit_heading: float | None,
     video_path: Path,
-) -> tuple[float | None, float | None, float | None]:
+) -> ResolvedGpsPose | None:
     """Pick the best Mobile-LPR pose for a new session.
 
     Precedence (first usable wins):
@@ -208,23 +267,131 @@ def _resolve_session_pose(
          (e.g. ``com.apple.quicktime.location.ISO6709`` from iOS .MOV files),
          combined with the configured default heading (or 0 = North).
       3. The configured default pose from ``settings.MOBILE_LPR_DEFAULT_*``.
+
+    When both explicit and video-metadata coordinates are present, the
+    explicit pose wins but the two are cross-checked: a >50 m disagreement
+    becomes a soft warning so the operator knows they may have paired the
+    wrong coordinates with the wrong upload.
+
+    Returns ``None`` when no source produced a usable pose — the session is
+    then created without GPS and processed as a static-camera capture.
     """
-    explicit = _validate_explicit_gps_pose(
+    metadata = extract_media_gps_metadata(video_path)
+    metadata_validated = _validated_metadata_pose(metadata)
+
+    explicit = _validated_explicit_pose(
         explicit_lat, explicit_lon, explicit_heading
     )
-    if explicit[0] is not None:
-        return explicit
+    if explicit is not None:
+        lat, lon, heading = explicit
+        warnings: list[str] = []
+        if metadata_validated is not None:
+            meta, _meta_warnings = metadata_validated
+            agree, distance = cross_validate_sources(
+                ValidatedCoordinates(latitude=lat, longitude=lon),
+                ValidatedCoordinates(
+                    latitude=meta.latitude, longitude=meta.longitude
+                ),
+            )
+            if not agree:
+                warnings.append(
+                    f"explicit GPS disagrees with video metadata by "
+                    f"{distance:.0f} m — verify the uploaded file matches "
+                    "the supplied coordinates"
+                )
+        return ResolvedGpsPose(
+            latitude=lat,
+            longitude=lon,
+            heading_deg=heading,
+            source=GpsSource.EXPLICIT,
+            status=(
+                GpsValidationStatus.WARNING
+                if warnings
+                else GpsValidationStatus.OK
+            ),
+            warnings=warnings,
+        )
 
-    metadata = extract_video_gps(video_path)
-    if metadata is not None:
-        meta_lat, meta_lon = metadata
-        # The container only stores lat/lon — heading falls back to the
-        # configured default, or 0° (North) when no default is set.
+    if metadata_validated is not None:
+        meta, meta_warnings = metadata_validated
+        # Heading precedence: EXIF GPSImgDirection (when the device wrote
+        # one) → configured default → 0° (North).  Most ffprobe-sourced
+        # video metadata does not carry a heading, so the default usually
+        # wins for video uploads; EXIF photos from a phone often do.
         heading_default = settings.MOBILE_LPR_DEFAULT_HEADING_DEG
-        heading = float(heading_default) if heading_default is not None else 0.0
-        return (meta_lat, meta_lon, heading % 360.0)
+        try:
+            if meta.heading_deg is not None:
+                heading_norm = validate_heading(float(meta.heading_deg))
+            elif heading_default is not None:
+                heading_norm = validate_heading(float(heading_default))
+            else:
+                heading_norm = 0.0
+        except GpsValidationError:
+            heading_norm = 0.0
+        return ResolvedGpsPose(
+            latitude=meta.latitude,
+            longitude=meta.longitude,
+            heading_deg=heading_norm,
+            source=GpsSource.VIDEO_METADATA,
+            status=(
+                GpsValidationStatus.WARNING
+                if meta_warnings
+                else GpsValidationStatus.OK
+            ),
+            accuracy_m=meta.accuracy_m,
+            warnings=meta_warnings,
+        )
 
-    return _default_gps_pose()
+    default = _validated_default_pose()
+    if default is not None:
+        lat, lon, heading = default
+        return ResolvedGpsPose(
+            latitude=lat,
+            longitude=lon,
+            heading_deg=heading,
+            source=GpsSource.CONFIG_DEFAULT,
+            status=GpsValidationStatus.OK,
+            warnings=[
+                "GPS pose came from MOBILE_LPR_DEFAULT_* — every session "
+                "without an explicit pose will be projected to this fixed "
+                "point; verify the default matches your deployment"
+            ],
+        )
+
+    return None
+
+
+def _apply_pose_to_session(
+    session_kwargs: dict,
+    pose: ResolvedGpsPose | None,
+) -> None:
+    """Merge a ``ResolvedGpsPose`` (or ``None``) into Session constructor kwargs.
+
+    Centralises the field-by-field copy so both upload endpoints stay in
+    sync as columns are added to the model.
+    """
+    if pose is None:
+        session_kwargs.update(
+            gps_latitude=None,
+            gps_longitude=None,
+            gps_heading_deg=None,
+            gps_source=None,
+            gps_accuracy_m=None,
+            gps_validation_status=None,
+            gps_validation_warnings=None,
+        )
+        return
+    session_kwargs.update(
+        gps_latitude=pose.latitude,
+        gps_longitude=pose.longitude,
+        gps_heading_deg=pose.heading_deg,
+        gps_source=pose.source.value,
+        gps_accuracy_m=pose.accuracy_m,
+        gps_validation_status=pose.status.value,
+        gps_validation_warnings=(
+            "\n".join(pose.warnings) if pose.warnings else None
+        ),
+    )
 
 
 @router.post("", response_model=SessionOut, status_code=201)
@@ -254,24 +421,23 @@ async def create_session(
     except Exception:
         pass
 
-    lat, lon, heading = _resolve_session_pose(
+    pose = _resolve_session_pose(
         explicit_lat=gps_latitude,
         explicit_lon=gps_longitude,
         explicit_heading=gps_heading_deg,
         video_path=dest,
     )
 
-    new_session = Session(
+    session_kwargs = dict(
         id=session_id,
         source_filename=filename,
         status="pending",
         fps_target=effective_fps_target,
         frames_processed=0,
         total_frames=total_frames,
-        gps_latitude=lat,
-        gps_longitude=lon,
-        gps_heading_deg=heading,
     )
+    _apply_pose_to_session(session_kwargs, pose)
+    new_session = Session(**session_kwargs)
     db.add(new_session)
     await db.commit()
     await db.refresh(new_session)
@@ -315,24 +481,23 @@ async def create_session_from_test_file(
     except Exception:
         pass
 
-    lat, lon, heading = _resolve_session_pose(
+    pose = _resolve_session_pose(
         explicit_lat=gps_latitude,
         explicit_lon=gps_longitude,
         explicit_heading=gps_heading_deg,
         video_path=dest,
     )
 
-    new_session = Session(
+    session_kwargs = dict(
         id=session_id,
         source_filename=source.name,
         status="pending",
         fps_target=effective_fps_target,
         frames_processed=0,
         total_frames=total_frames,
-        gps_latitude=lat,
-        gps_longitude=lon,
-        gps_heading_deg=heading,
     )
+    _apply_pose_to_session(session_kwargs, pose)
+    new_session = Session(**session_kwargs)
     db.add(new_session)
     await db.commit()
     await db.refresh(new_session)
