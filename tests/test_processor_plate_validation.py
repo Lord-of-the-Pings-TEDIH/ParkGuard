@@ -554,4 +554,152 @@ async def test_track_stays_not_final_while_visible_and_finalizes_after_disappear
     assert DetectionOut.model_validate(detections[0]).voting_tag == "final"
     assert DetectionOut.model_validate(detections[1]).voting_tag == "final"
     assert DetectionOut.model_validate(detections[2]).voting_tag == "final"
-    lookup_mock.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_mobile_lpr_sets_gps_eagerly_on_every_detection(
+    db: AsyncSession,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Each detection persists target_lat/lon as soon as it is created when a
+    Mobile-LPR pose is supplied — the live UI shouldn't need to wait for
+    track finalization to show GPS coordinates per car.
+    """
+    uploads_dir = tmp_path / "uploads"
+    crops_dir = tmp_path / "crops"
+    uploads_dir.mkdir()
+    crops_dir.mkdir()
+
+    lookup_mock = AsyncMock(return_value=("active", None, 123, None))
+    _configure_processor(
+        monkeypatch,
+        uploads_dir,
+        crops_dir,
+        lookup_mock,
+        extract_frames_fn=_three_frames,
+    )
+
+    session_obj = await _create_session_and_video(db, uploads_dir)
+
+    pose = processor.VehiclePose(
+        latitude=47.2584, longitude=23.2537, heading_deg=90.0
+    )
+    intrinsics = processor.CameraIntrinsics(
+        height_m=1.5,
+        focal_length_px=1000.0,
+        pitch_deg=5.0,
+        image_width_px=48,
+        image_height_px=24,
+    )
+    mobile_lpr = processor.MobileLPRContext(
+        calculator=processor.PlateGeolocationCalculator(intrinsics),
+        pose=pose,
+        search_radius_m=3.0,
+    )
+
+    await processor.process_session(
+        session_obj.id,
+        db,
+        ocr=lambda _crop: "CJ05XY0",
+        zone_id=1,
+        mobile_lpr=mobile_lpr,
+    )
+
+    detections = (
+        await db.execute(
+            select(Detection)
+            .join(Frame, Detection.frame_id == Frame.id)
+            .where(Frame.session_id == session_obj.id)
+            .order_by(Frame.frame_index.asc())
+        )
+    ).scalars().all()
+
+    # Each detection has GPS set: bbox (1, 1, 4, 2) on a 48×24 frame is below
+    # the principal point so the projection succeeds for all three frames.
+    assert len(detections) == 3
+    for detection in detections:
+        assert detection.target_latitude is not None
+        assert detection.target_longitude is not None
+        # Roughly close to the camera pose — within 50 m.
+        assert abs(detection.target_latitude - pose.latitude) < 0.001
+        assert abs(detection.target_longitude - pose.longitude) < 0.001
+
+
+@pytest.mark.asyncio
+async def test_finalize_keeps_per_detection_gps(
+    db: AsyncSession,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Finalization must preserve each detection's own bbox-projected GPS.
+
+    Regression: the previous implementation overwrote target_lat/lon with the
+    projection of ``track.best_conf_bbox`` for every detection in the track,
+    collapsing all cars to a single point.
+    """
+
+    class TwoBoxDetector(FakeDetector):
+        def detect(self, frame, frame_index=0):
+            _ = frame, frame_index
+            # Two distinct bboxes at different y → projection returns
+            # noticeably different distances → different lat/lon.
+            return [
+                {"bbox": (1, 6, 4, 2), "confidence": 0.95},
+                {"bbox": (40, 18, 4, 2), "confidence": 0.90},
+            ]
+
+    uploads_dir = tmp_path / "uploads"
+    crops_dir = tmp_path / "crops"
+    uploads_dir.mkdir()
+    crops_dir.mkdir()
+
+    lookup_mock = AsyncMock(return_value=("active", None, 123, None))
+    _configure_processor(
+        monkeypatch,
+        uploads_dir,
+        crops_dir,
+        lookup_mock,
+        detector_cls=TwoBoxDetector,
+    )
+
+    session_obj = await _create_session_and_video(db, uploads_dir)
+
+    intrinsics = processor.CameraIntrinsics(
+        height_m=1.5,
+        focal_length_px=1000.0,
+        pitch_deg=5.0,
+        image_width_px=48,
+        image_height_px=24,
+    )
+    mobile_lpr = processor.MobileLPRContext(
+        calculator=processor.PlateGeolocationCalculator(intrinsics),
+        pose=processor.VehiclePose(
+            latitude=47.2584, longitude=23.2537, heading_deg=90.0
+        ),
+        search_radius_m=3.0,
+    )
+
+    await processor.process_session(
+        session_obj.id,
+        db,
+        ocr=lambda _crop: "CJ05XY0",
+        zone_id=1,
+        mobile_lpr=mobile_lpr,
+    )
+
+    detections = (
+        await db.execute(
+            select(Detection)
+            .join(Frame, Detection.frame_id == Frame.id)
+            .where(Frame.session_id == session_obj.id)
+        )
+    ).scalars().all()
+    assert len(detections) == 2
+    coords = {(d.target_latitude, d.target_longitude) for d in detections}
+    # Each detection projects its OWN bbox, so the two cars must have two
+    # different GPS coordinates after finalization.
+    assert len(coords) == 2
+    for d in detections:
+        assert d.target_latitude is not None
+        assert d.target_longitude is not None

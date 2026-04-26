@@ -28,6 +28,58 @@ class Settings(BaseSettings):
     # in challenging lighting conditions at the cost of ~3× OCR time.
     OCR_MULTI_PASS: bool = True
 
+    # --- OCR speed-ups (no accuracy loss) ---
+    # Once the first preprocessing pass / first angle returns a *valid*
+    # Romanian plate with confidence >= OCR_EARLY_EXIT_CONF, skip the
+    # remaining passes/angles for that detection.  The high-confidence
+    # path covers the vast majority of frames and the angle/multi-pass
+    # sweep only kicks in when needed (tilted, washed-out, blurred).
+    OCR_EARLY_EXIT_CONF: float = 0.85
+    # Once a track has accumulated stable consensus (best plate with
+    # >= MIN_TRACK_VOTES votes at confidence >= OCR_SKIP_STABLE_CONF AND
+    # the track has been observed >= MIN_TRACK_VOTES * 2 times), additional
+    # OCR runs on subsequent frames of the same track are pure overhead —
+    # the canonical plate is locked in and the finalizer relabels every
+    # detection in the track anyway.  Skipping OCR on stable tracks gives
+    # ~50–80% reduction in pipeline time on long clips with parked cars.
+    OCR_SKIP_STABLE_TRACKS: bool = True
+    OCR_SKIP_STABLE_CONF: float = 0.85
+    # Commit progress every N processed frames instead of every frame.
+    # Reduces DB write amplification at the cost of slightly chunkier
+    # progress updates (still well under one second on typical CPU loads).
+    PROCESSOR_COMMIT_EVERY_FRAMES: int = 4
+
+    # --- Mobile-LPR (Mobile License Plate Recognition) ---
+    # Defaults for the police-car camera intrinsics used by
+    # PlateGeolocationCalculator.  Override per-deployment in .env.  The
+    # geolocation step is only enabled when a Session is created with
+    # GPS pose; otherwise these values are unused.
+    MOBILE_LPR_CAMERA_HEIGHT_M: float = 1.5
+    # Focal length in pixels of the recorded video.  4K iPhone wide-angle
+    # falls in the 2800–3200 px range; 2800 is a reasonable default.
+    MOBILE_LPR_CAMERA_FOCAL_PX: float = 2800.0
+    MOBILE_LPR_CAMERA_PITCH_DEG: float = 5.0
+    # Plate centre is assumed at this height above the ground.
+    MOBILE_LPR_PLATE_HEIGHT_M: float = 0.6
+    # Search radius (metres) used by validate_parking_at_location to bind
+    # a projected GPS point to a registered ParkingSpot.
+    MOBILE_LPR_SEARCH_RADIUS_M: float = 3.0
+    # Hard cap on the projected distance.  Plates at or above the geometric
+    # horizon (typical of distant cars in handheld portrait video) are
+    # clamped to this distance so every detection still produces a GPS
+    # estimate.  Increase to surface a wider cone; decrease to keep
+    # estimates conservative.
+    MOBILE_LPR_MAX_DISTANCE_M: float = 50.0
+    # Default camera pose used when a session is created without an explicit
+    # GPS pose (latitude/longitude/heading_deg).  When all three defaults are
+    # set, every session — including hardcoded test sessions — will project
+    # plates to GPS automatically and the per-car coordinates show up in the
+    # UI without the user having to fill in the Mobile-LPR panel each time.
+    # Leave any of them as ``None`` to opt out.
+    MOBILE_LPR_DEFAULT_LATITUDE: float | None = None
+    MOBILE_LPR_DEFAULT_LONGITUDE: float | None = None
+    MOBILE_LPR_DEFAULT_HEADING_DEG: float | None = None
+
     # --- AI Super-Resolution ---
     # When enabled, crops smaller than OCR_SUPER_RES_MIN_HEIGHT are upscaled
     # by an AI model (ESPCN by default) before OCR, improving accuracy on

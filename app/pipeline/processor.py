@@ -26,8 +26,14 @@ from app.models.detection import Detection, Frame, Plate, Session
 from app.pipeline.deskew import deskew_plate
 from app.pipeline.detector import PlateDetector
 from app.pipeline.frame_extractor import extract_frames, get_video_info
+from app.pipeline.geolocation import (
+    CameraIntrinsics,
+    PlateGeolocationCalculator,
+    VehiclePose,
+)
 from app.pipeline.plate_color import PlateType, classify_plate_color
 from app.pipeline.plate_validator import compact_plate, is_invalid_plate, normalize_plate
+from app.services.parking_validation import validate_parking_at_location
 from app.services.ticket_lookup import lookup_ticket
 
 logger = logging.getLogger(__name__)
@@ -55,9 +61,67 @@ class PlateTrack:
     best_conf_plate: str | None = None
     best_confidence: float = 0.0
     best_conf_detection_id: uuid.UUID | None = None
+    best_conf_bbox: tuple[int, int, int, int] | None = None
     last_detection_id: uuid.UUID | None = None
     detection_ids: list[uuid.UUID] = field(default_factory=list)
     finalized: bool = False
+
+
+@dataclass(frozen=True)
+class MobileLPRContext:
+    """Per-session geolocation context.
+
+    Bundling the calculator + pose + radius lets us pass a single optional
+    object to ``process_session`` rather than half a dozen scalars.  When
+    ``None`` the geolocation step is skipped entirely.
+    """
+
+    calculator: PlateGeolocationCalculator
+    pose: VehiclePose
+    search_radius_m: float
+
+
+def build_mobile_lpr_context(
+    session: Session,
+    *,
+    image_width: int | None,
+    image_height: int | None,
+) -> MobileLPRContext | None:
+    """Construct a ``MobileLPRContext`` if ``session`` has GPS pose set.
+
+    Returns ``None`` when the session lacks any of latitude/longitude/heading
+    or when the image dimensions cannot be determined — in either case the
+    pipeline runs without spot validation, exactly like a static camera.
+    """
+    if session.gps_latitude is None or session.gps_longitude is None:
+        return None
+    if session.gps_heading_deg is None:
+        return None
+    if not image_width or not image_height:
+        return None
+
+    intrinsics = CameraIntrinsics(
+        height_m=float(settings.MOBILE_LPR_CAMERA_HEIGHT_M),
+        focal_length_px=float(settings.MOBILE_LPR_CAMERA_FOCAL_PX),
+        pitch_deg=float(settings.MOBILE_LPR_CAMERA_PITCH_DEG),
+        image_width_px=int(image_width),
+        image_height_px=int(image_height),
+    )
+    calculator = PlateGeolocationCalculator(
+        intrinsics,
+        plate_height_m=float(settings.MOBILE_LPR_PLATE_HEIGHT_M),
+        max_distance_m=float(settings.MOBILE_LPR_MAX_DISTANCE_M),
+    )
+    pose = VehiclePose(
+        latitude=float(session.gps_latitude),
+        longitude=float(session.gps_longitude),
+        heading_deg=float(session.gps_heading_deg),
+    )
+    return MobileLPRContext(
+        calculator=calculator,
+        pose=pose,
+        search_radius_m=float(settings.MOBILE_LPR_SEARCH_RADIUS_M),
+    )
 
 
 RecognizerOutput: TypeAlias = str | tuple[str | None, float] | None
@@ -166,11 +230,26 @@ def _best_ocr_candidate(
     *,
     ocr_angles: tuple[float, ...],
     plate_type: str | None = None,
+    early_exit_conf: float | None = None,
 ) -> OCRCandidate:
+    """Iterate angles and return the best (valid + highest-conf) candidate.
+
+    When ``early_exit_conf`` is set and the *first* angle that produces a
+    valid plate hits ``confidence >= early_exit_conf``, the remaining
+    angles are skipped — most plates are not tilted, so this short-circuit
+    drops the average angle-sweep from 5 OCR calls to 1 without affecting
+    the cases that actually need rotation.  Pass ``None`` to keep the old
+    behaviour (sweep every angle).
+    """
     best_valid = OCRCandidate()
     best_any = OCRCandidate()
 
-    for angle in ocr_angles:
+    # Run the un-rotated angle first so the early-exit shortcut fires on
+    # the most common case.  ``ocr_angles`` already canonicalises 0° to be
+    # present in the list (see ``_parse_ocr_angles``).
+    ordered_angles = sorted(ocr_angles, key=lambda a: abs(a))
+
+    for angle in ordered_angles:
         candidate_image = _rotate_bound(crop, angle)
         raw_text, confidence = _read_with_recognizer(recognize, candidate_image)
         if raw_text:
@@ -191,7 +270,40 @@ def _best_ocr_candidate(
         if candidate.is_valid and candidate.confidence > best_valid.confidence:
             best_valid = candidate
 
+        if (
+            early_exit_conf is not None
+            and best_valid.is_valid
+            and best_valid.confidence >= early_exit_conf
+        ):
+            # First valid+high-conf hit wins — no need to keep sweeping.
+            return best_valid
+
     return best_valid if best_valid.raw_text else best_any
+
+
+def _track_is_stable(
+    track: PlateTrack,
+    *,
+    min_votes: int,
+    min_confidence: float,
+) -> bool:
+    """Return True when a track has converged enough to skip per-frame OCR.
+
+    Stable means: we have observed the track at least twice the vote
+    threshold, the leading plate has reached the vote threshold, and the
+    best per-detection confidence is high.  Once stable, additional OCR
+    runs are pure overhead — the finalizer relabels every detection in
+    the track with the canonical plate, so leaving the per-frame OCR text
+    unset costs nothing downstream.
+    """
+    if track.observations < min_votes * 2:
+        return False
+    if track.best_conf_plate is None:
+        return False
+    if track.best_confidence < min_confidence:
+        return False
+    leading_votes = max(track.votes.values(), default=0)
+    return leading_votes >= min_votes
 
 
 def _prefer_candidate(current: OCRCandidate, fallback: OCRCandidate) -> OCRCandidate:
@@ -406,6 +518,46 @@ async def _get_or_create_plate(
     return plate
 
 
+async def _resolve_spot_match(
+    *,
+    track: PlateTrack,
+    plate_text: str,
+    mobile_lpr: MobileLPRContext,
+    db: AsyncSession,
+) -> tuple[float, float, str, float | None, int | None] | None:
+    """Project the track's best bbox to GPS and validate against ParkingSpot.
+
+    Returns ``None`` if the geometry is degenerate (plate above the horizon).
+    Otherwise returns ``(target_lat, target_lon, status, distance_m, spot_id)``
+    so the caller can stamp every detection in the track with the same result.
+    """
+    bbox = track.best_conf_bbox or track.bbox
+    bbox_xywh = (float(bbox[0]), float(bbox[1]), float(bbox[2]), float(bbox[3]))
+
+    try:
+        target_lat, target_lon = mobile_lpr.calculator.project(
+            mobile_lpr.pose, bbox_xywh
+        )
+    except ValueError as exc:
+        logger.debug("Skipping geolocation for track %s: %s", track.track_id, exc)
+        return None
+
+    spot_match = await validate_parking_at_location(
+        target_lat=target_lat,
+        target_lon=target_lon,
+        plate_text=plate_text,
+        db=db,
+        radius_m=mobile_lpr.search_radius_m,
+    )
+    return (
+        target_lat,
+        target_lon,
+        spot_match.status,
+        spot_match.distance_m,
+        spot_match.spot.id if spot_match.spot is not None else None,
+    )
+
+
 async def _finalize_track_with_fallback(
     track: PlateTrack,
     *,
@@ -413,6 +565,7 @@ async def _finalize_track_with_fallback(
     zone_id: int | None,
     min_track_votes: int,
     finalized_registry: dict[str, tuple[int, float]],
+    mobile_lpr: MobileLPRContext | None = None,
 ) -> None:
     """Finalize unresolved tracks with the best-confidence valid plate.
 
@@ -474,8 +627,36 @@ async def _finalize_track_with_fallback(
         detection_id=representative.id,
     )
 
+    # Mobile-LPR: project the plate's pixel position to a GPS coordinate and
+    # check it against the registered parking spots.  Skipped for static
+    # cameras (mobile_lpr is None) or when the geometry is degenerate.
+    spot_result: tuple[float, float, str, float | None, int | None] | None = None
+    if mobile_lpr is not None:
+        spot_result = await _resolve_spot_match(
+            track=track,
+            plate_text=compact_text,
+            mobile_lpr=mobile_lpr,
+            db=db,
+        )
+
     # Relabel every detection in the track.  ocr_raw_text is preserved so the
     # per-frame OCR remains visible; only the normalized view collapses.
+    #
+    # GPS handling is split between per-detection and per-track:
+    #   • target_latitude / target_longitude are computed from each detection's
+    #     own bbox so different cars in the same track sit at different points.
+    #     If eager projection ran at frame-time the value is already set; for
+    #     older rows (or when eager projection raised) we retry here.
+    #   • spot_match_status / target_distance_m / matched_spot_id are a
+    #     track-level decision driven by the best-confidence frame, so they
+    #     apply identically to every detection in the track.
+    if spot_result is not None:
+        _, _, track_status, track_distance, track_spot_id = spot_result
+    else:
+        track_status = None
+        track_distance = None
+        track_spot_id = None
+
     for detection_id in track.detection_ids:
         detection = await db.get(Detection, detection_id)
         if detection is None or detection.ticket_status is not None:
@@ -485,6 +666,31 @@ async def _finalize_track_with_fallback(
         detection.plate_id = plate.id
         detection.ticket_status = status
         detection.ticket_expires_at = expires_at
+
+        if mobile_lpr is not None and (
+            detection.target_latitude is None
+            or detection.target_longitude is None
+        ):
+            try:
+                d_lat, d_lon = mobile_lpr.calculator.project(
+                    mobile_lpr.pose,
+                    (
+                        float(detection.bbox_x),
+                        float(detection.bbox_y),
+                        float(detection.bbox_w),
+                        float(detection.bbox_h),
+                    ),
+                )
+            except ValueError:
+                pass
+            else:
+                detection.target_latitude = d_lat
+                detection.target_longitude = d_lon
+
+        if spot_result is not None:
+            detection.spot_match_status = track_status
+            detection.target_distance_m = track_distance
+            detection.matched_spot_id = track_spot_id
 
     await db.flush()
     track.finalized = True
@@ -506,8 +712,16 @@ async def process_session(
     *,
     ocr: Recognizer | None = None,
     zone_id: int | None = None,
+    mobile_lpr: MobileLPRContext | None = None,
 ) -> None:
-    """Process every frame in a session's video file with robust OCR/voting."""
+    """Process every frame in a session's video file with robust OCR/voting.
+
+    When ``mobile_lpr`` is provided, every finalised track also has its
+    bounding box projected to a GPS coordinate and validated against the
+    registered ``ParkingSpot`` rows; the resulting status/coords are stamped
+    on every detection in the track.  Pass ``None`` for the static-camera
+    flow (preserves existing behaviour).
+    """
     recognize = ocr or _noop_ocr
 
     session = await db.get(Session, session_id)
@@ -531,7 +745,10 @@ async def process_session(
     track_max_age = max(1, int(settings.TRACK_MAX_AGE))
     track_min_iou = max(0.01, min(0.99, float(settings.TRACK_MIN_IOU)))
     min_track_votes = max(1, int(settings.MIN_TRACK_VOTES))
-    progress_commit_every = 1
+    early_exit_conf = max(0.0, min(1.0, float(settings.OCR_EARLY_EXIT_CONF)))
+    skip_stable_tracks = bool(settings.OCR_SKIP_STABLE_TRACKS)
+    skip_stable_conf = max(0.0, min(1.0, float(settings.OCR_SKIP_STABLE_CONF)))
+    progress_commit_every = max(1, int(settings.PROCESSOR_COMMIT_EVERY_FRAMES))
     session_crops_dir = Path(settings.CROPS_DIR) / str(session_id)
     session_crops_dir.mkdir(parents=True, exist_ok=True)
 
@@ -577,6 +794,7 @@ async def process_session(
                     zone_id=zone_id,
                     min_track_votes=min_track_votes,
                     finalized_registry=finalized_plate_registry,
+                    mobile_lpr=mobile_lpr,
                 )
 
             detections = detector.detect(frame_img, frame_index=frame_index)
@@ -627,46 +845,65 @@ async def process_session(
                     color_hint.value if color_hint != PlateType.UNKNOWN else None
                 )
 
+                # Skip OCR entirely once the track has already converged.
+                # The finalizer relabels every detection in the track with
+                # the canonical plate, so the per-frame OCR fields can stay
+                # empty for the post-stable detections without losing data.
+                track_stable = skip_stable_tracks and _track_is_stable(
+                    track,
+                    min_votes=min_track_votes,
+                    min_confidence=skip_stable_conf,
+                )
+
                 candidate = OCRCandidate()
-                rectified = deskew_plate(crop)
-                if rectified.size == 0:
-                    rectified = crop
+                if not track_stable:
+                    rectified = deskew_plate(crop)
+                    if rectified.size == 0:
+                        rectified = crop
 
-                sharpness = _sharpness_score(rectified)
-                if sharpness >= min_sharpness:
-                    ocr_input = (
-                        _enhance_motion_blur(rectified)
-                        if sharpness < min_sharpness * 1.35
-                        else rectified
-                    )
-                    candidate = _best_ocr_candidate(
-                        recognize,
-                        ocr_input,
-                        ocr_angles=ocr_angles,
-                        plate_type=plate_type_str,
-                    )
-                else:
-                    candidate = _best_ocr_candidate(
-                        recognize,
-                        crop,
-                        ocr_angles=ocr_angles,
-                        plate_type=plate_type_str,
-                    )
-
-                if not candidate.raw_text:
-                    fallback_candidate = _best_ocr_candidate(
-                        recognize,
-                        crop,
-                        ocr_angles=ocr_angles,
-                        plate_type=plate_type_str,
-                    )
-                    candidate = _prefer_candidate(candidate, fallback_candidate)
-
-                if candidate.raw_text and candidate.confidence >= min_ocr_conf:
-                    if candidate.is_valid:
-                        _register_track_vote(
-                            track, candidate.normalized, candidate.confidence
+                    sharpness = _sharpness_score(rectified)
+                    if sharpness >= min_sharpness:
+                        ocr_input = (
+                            _enhance_motion_blur(rectified)
+                            if sharpness < min_sharpness * 1.35
+                            else rectified
                         )
+                        candidate = _best_ocr_candidate(
+                            recognize,
+                            ocr_input,
+                            ocr_angles=ocr_angles,
+                            plate_type=plate_type_str,
+                            early_exit_conf=early_exit_conf,
+                        )
+                    else:
+                        candidate = _best_ocr_candidate(
+                            recognize,
+                            crop,
+                            ocr_angles=ocr_angles,
+                            plate_type=plate_type_str,
+                            early_exit_conf=early_exit_conf,
+                        )
+
+                    # Only retry on the raw crop when the rectified pass came
+                    # back genuinely empty.  Previously we re-ran the angle
+                    # sweep even on a partial result, doubling OCR work for
+                    # the no-ops.  The retry keeps the deskew-failure recovery
+                    # without paying for it on the happy path.
+                    if not candidate.raw_text:
+                        fallback_candidate = _best_ocr_candidate(
+                            recognize,
+                            crop,
+                            ocr_angles=ocr_angles,
+                            plate_type=plate_type_str,
+                            early_exit_conf=early_exit_conf,
+                        )
+                        candidate = _prefer_candidate(candidate, fallback_candidate)
+
+                    if candidate.raw_text and candidate.confidence >= min_ocr_conf:
+                        if candidate.is_valid:
+                            _register_track_vote(
+                                track, candidate.normalized, candidate.confidence
+                            )
 
                 raw_plate_text = candidate.raw_text or None
                 normalized_plate_text = candidate.normalized if candidate.raw_text else None
@@ -688,6 +925,21 @@ async def process_session(
                     ocr_normalized_text=normalized_plate_text,
                     is_valid_ro_plate=is_valid_ro_plate,
                 )
+                # Eagerly project this detection's bbox to a GPS coordinate so
+                # the live (pre-finalization) UI can show per-car GPS.  The
+                # spot-match status is left for finalization, when the canonical
+                # plate text is known and the cross-track registry has settled.
+                if mobile_lpr is not None:
+                    try:
+                        proj_lat, proj_lon = mobile_lpr.calculator.project(
+                            mobile_lpr.pose,
+                            (float(bbox_x), float(bbox_y), float(bbox_w), float(bbox_h)),
+                        )
+                    except ValueError:
+                        proj_lat = proj_lon = None
+                    if proj_lat is not None and proj_lon is not None:
+                        detection.target_latitude = proj_lat
+                        detection.target_longitude = proj_lon
                 db.add(detection)
                 await db.flush()
                 track.last_detection_id = detection.id
@@ -702,6 +954,7 @@ async def process_session(
                     track.best_confidence = candidate.confidence
                     track.best_conf_plate = candidate.normalized
                     track.best_conf_detection_id = detection.id
+                    track.best_conf_bbox = bbox
 
             frames_processed += 1
             session.frames_processed = frames_processed
@@ -715,6 +968,7 @@ async def process_session(
                 zone_id=zone_id,
                 min_track_votes=min_track_votes,
                 finalized_registry=finalized_plate_registry,
+                mobile_lpr=mobile_lpr,
             )
 
         session.frames_processed = frames_processed

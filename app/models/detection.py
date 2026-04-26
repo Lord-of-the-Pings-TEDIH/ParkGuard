@@ -42,6 +42,23 @@ class Session(Base):
         DateTime(timezone=True), nullable=True
     )
 
+    # Mobile-LPR pose: GPS position and heading of the police car at capture time.
+    # All three must be set together to enable spot validation; otherwise the
+    # geolocation step is skipped and the session behaves like a static camera.
+    gps_latitude: Mapped[float | None] = mapped_column(Float, nullable=True)
+    gps_longitude: Mapped[float | None] = mapped_column(Float, nullable=True)
+    gps_heading_deg: Mapped[float | None] = mapped_column(Float, nullable=True)
+
+    # GPS provenance + quality so the UI can show where the pose came from
+    # ("explicit"/"video_metadata"/"config_default") and any soft-validation
+    # warnings raised while resolving it.  ``gps_accuracy_m`` is the
+    # horizontal-accuracy estimate in metres (when available from the video
+    # container — iOS 11+).  All fields nullable for static-camera sessions.
+    gps_source: Mapped[str | None] = mapped_column(String(30), nullable=True)
+    gps_accuracy_m: Mapped[float | None] = mapped_column(Float, nullable=True)
+    gps_validation_status: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    gps_validation_warnings: Mapped[str | None] = mapped_column(Text, nullable=True)
+
     # Relationships
     frames: Mapped[list["Frame"]] = relationship(
         back_populates="session", cascade="all, delete-orphan"
@@ -108,6 +125,19 @@ class Detection(Base):
     )
     ticket_expires_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
+    )
+
+    # Mobile-LPR projection result.  Populated when the parent Session has GPS
+    # pose set; otherwise the values stay NULL and the frontend hides the spot
+    # match badge.
+    target_latitude: Mapped[float | None] = mapped_column(Float, nullable=True)
+    target_longitude: Mapped[float | None] = mapped_column(Float, nullable=True)
+    spot_match_status: Mapped[str | None] = mapped_column(
+        String(20), nullable=True
+    )
+    target_distance_m: Mapped[float | None] = mapped_column(Float, nullable=True)
+    matched_spot_id: Mapped[int | None] = mapped_column(
+        ForeignKey("parking_spots.id"), nullable=True, index=True
     )
 
     created_at: Mapped[datetime] = mapped_column(

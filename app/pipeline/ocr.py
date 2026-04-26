@@ -259,6 +259,8 @@ class PlateReader:
         fsm_beam_width: int = 5,
         # --- Multi-pass ---
         use_multi_pass: bool = False,
+        # --- Early-exit on first valid + high-conf pass ---
+        early_exit_conf: float = 0.85,
         # --- AI Super-Resolution ---
         use_super_res: bool = False,
         super_res_min_height: int = 32,
@@ -289,6 +291,7 @@ class PlateReader:
 
         # --- Multi-pass ---
         self._use_multi_pass = use_multi_pass
+        self._early_exit_conf = max(0.0, min(1.0, float(early_exit_conf)))
 
         # --- AI Super-Resolution ---
         self._super_resolver = None
@@ -326,6 +329,7 @@ class PlateReader:
             use_fsm_decode=settings.OCR_FSM_DECODE,
             fsm_beam_width=settings.OCR_FSM_BEAM_WIDTH,
             use_multi_pass=settings.OCR_MULTI_PASS,
+            early_exit_conf=settings.OCR_EARLY_EXIT_CONF,
             use_super_res=settings.OCR_SUPER_RES,
             super_res_min_height=settings.OCR_SUPER_RES_MIN_HEIGHT,
             super_res_model=settings.OCR_SUPER_RES_MODEL,
@@ -440,6 +444,12 @@ class PlateReader:
         Selection priority:
           1. Valid Romanian plate with highest confidence
           2. Any non-empty text with highest confidence
+
+        When the first pass already returns a *valid* plate at confidence
+        >= ``early_exit_conf``, we short-circuit instead of running the
+        remaining preprocessing variants.  CLAHE (the first pass) handles
+        ~70% of typical lighting conditions on its own; the adaptive and
+        inverted passes are there as fallbacks for the harder cases.
         """
         from app.pipeline.plate_validator import is_invalid_plate, normalize_plate
 
@@ -482,6 +492,8 @@ class PlateReader:
                     text,
                     conf,
                 )
+                if best_valid_conf >= self._early_exit_conf:
+                    return best_valid_text, best_valid_conf
 
         # Prefer valid over any.
         if best_valid_text:

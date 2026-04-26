@@ -1,11 +1,14 @@
 import { useState, useCallback, useRef } from "react";
 import { Upload } from "lucide-react";
 import { Button } from "./ui/button";
+import { Input } from "./ui/input";
 import { Label } from "./ui/label";
 import { Slider } from "./ui/slider";
+import { Switch } from "./ui/switch";
+import type { MobileLprPose } from "../types";
 
 interface UploadZoneProps {
-  onUpload: (file: File, fps: number) => void;
+  onUpload: (file: File, fps: number, pose: MobileLprPose | null) => void;
   isProcessing: boolean;
 }
 
@@ -13,7 +16,27 @@ export function UploadZone({ onUpload, isProcessing }: UploadZoneProps) {
   const [isDragging, setIsDragging] = useState(false);
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const [fps, setFps] = useState([5]);
+  const [mobileLprEnabled, setMobileLprEnabled] = useState(false);
+  const [latitude, setLatitude] = useState("");
+  const [longitude, setLongitude] = useState("");
+  const [headingDeg, setHeadingDeg] = useState("");
+  const [poseError, setPoseError] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
+
+  const parsePose = (): MobileLprPose | null | "invalid" => {
+    if (!mobileLprEnabled) return null;
+    const lat = Number.parseFloat(latitude);
+    const lon = Number.parseFloat(longitude);
+    const hdg = Number.parseFloat(headingDeg);
+    if (
+      Number.isNaN(lat) || lat < -90 || lat > 90 ||
+      Number.isNaN(lon) || lon < -180 || lon > 180 ||
+      Number.isNaN(hdg)
+    ) {
+      return "invalid";
+    }
+    return { latitude: lat, longitude: lon, headingDeg: ((hdg % 360) + 360) % 360 };
+  };
 
   const handleDragOver = useCallback((e: React.DragEvent) => {
     e.preventDefault();
@@ -43,9 +66,14 @@ export function UploadZone({ onUpload, isProcessing }: UploadZoneProps) {
   }, []);
 
   const handleSubmit = () => {
-    if (selectedFile) {
-      onUpload(selectedFile, fps[0]);
+    if (!selectedFile) return;
+    const pose = parsePose();
+    if (pose === "invalid") {
+      setPoseError("Enter valid latitude (-90..90), longitude (-180..180), and heading (degrees).");
+      return;
     }
+    setPoseError(null);
+    onUpload(selectedFile, fps[0], pose);
   };
 
   const openFilePicker = () => {
@@ -93,13 +121,13 @@ export function UploadZone({ onUpload, isProcessing }: UploadZoneProps) {
             {selectedFile ? selectedFile.name : "Drop video here"}
           </p>
           <p className="mb-4 text-xs text-muted-foreground md:text-sm">
-            .mp4, .avi, .mkv · max 2GB
+            .mp4, .mov, .avi, .mkv
           </p>
           <input
             type="file"
             ref={fileInputRef}
             className="hidden"
-            accept=".mp4,.avi,.mkv,video/mp4,video/x-msvideo,video/x-matroska"
+            accept=".mp4,.mov,.avi,.mkv,video/mp4,video/quicktime,video/x-msvideo,video/x-matroska"
             onChange={handleFileSelect}
             disabled={isProcessing}
           />
@@ -132,6 +160,63 @@ export function UploadZone({ onUpload, isProcessing }: UploadZoneProps) {
             />
           </div>
 
+          <div className="space-y-3 rounded-md border border-border bg-muted/30 p-3">
+            <div className="flex items-center justify-between gap-3">
+              <div className="space-y-0.5">
+                <Label className="text-foreground">Mobile-LPR mode</Label>
+                <p className="text-xs text-muted-foreground">
+                  Project plates to GPS &amp; check assigned parking spots
+                </p>
+              </div>
+              <Switch
+                checked={mobileLprEnabled}
+                onCheckedChange={(checked) => {
+                  setMobileLprEnabled(checked);
+                  setPoseError(null);
+                }}
+              />
+            </div>
+
+            {mobileLprEnabled && (
+              <div className="grid grid-cols-3 gap-2">
+                <div>
+                  <Label htmlFor="lpr-lat" className="text-xs">Latitude</Label>
+                  <Input
+                    id="lpr-lat"
+                    inputMode="decimal"
+                    placeholder="46.7701"
+                    value={latitude}
+                    onChange={(e) => setLatitude(e.target.value)}
+                  />
+                </div>
+                <div>
+                  <Label htmlFor="lpr-lon" className="text-xs">Longitude</Label>
+                  <Input
+                    id="lpr-lon"
+                    inputMode="decimal"
+                    placeholder="23.5895"
+                    value={longitude}
+                    onChange={(e) => setLongitude(e.target.value)}
+                  />
+                </div>
+                <div>
+                  <Label htmlFor="lpr-hdg" className="text-xs">Heading °</Label>
+                  <Input
+                    id="lpr-hdg"
+                    inputMode="decimal"
+                    placeholder="90"
+                    value={headingDeg}
+                    onChange={(e) => setHeadingDeg(e.target.value)}
+                  />
+                </div>
+              </div>
+            )}
+
+            {poseError && (
+              <p className="text-xs text-red-600 dark:text-red-400">{poseError}</p>
+            )}
+          </div>
+
           <Button
             onClick={handleSubmit}
             disabled={isProcessing}
@@ -146,13 +231,18 @@ export function UploadZone({ onUpload, isProcessing }: UploadZoneProps) {
 }
 
 function isValidVideoFile(file: File): boolean {
-  const validTypes = ["video/mp4", "video/x-msvideo", "video/x-matroska"];
-  const validExtensions = [".mp4", ".avi", ".mkv"];
-  const maxSize = 2 * 1024 * 1024 * 1024; // 2GB
+  const validTypes = [
+    "video/mp4",
+    "video/quicktime",
+    "video/x-msvideo",
+    "video/x-matroska",
+  ];
+  const validExtensions = [".mp4", ".mov", ".avi", ".mkv"];
 
   const hasValidType = validTypes.includes(file.type);
-  const hasValidExtension = validExtensions.some(ext => file.name.toLowerCase().endsWith(ext));
-  const hasValidSize = file.size <= maxSize;
+  const hasValidExtension = validExtensions.some((ext) =>
+    file.name.toLowerCase().endsWith(ext)
+  );
 
-  return (hasValidType || hasValidExtension) && hasValidSize;
+  return hasValidType || hasValidExtension;
 }

@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useRef } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { motion, AnimatePresence } from "motion/react";
 import { AlertCircle, ArrowLeft } from "lucide-react";
 import { UploadZone } from "../components/UploadZone";
@@ -19,9 +19,16 @@ import {
   getHardcodedTestFiles,
   startSessionProcessing,
 } from "../services/api";
-import type { Session, Detection } from "../types";
+import type { Session, Detection, MobileLprPose } from "../types";
 
 type ViewState = "idle" | "processing" | "results";
+
+function viewStateForStatus(status: Session["status"]): ViewState {
+  // "running" is the only state that benefits from the live poller; for any
+  // other status (done / pending / failed) we just show the existing
+  // detections, no auto-restart.
+  return status === "running" ? "processing" : "results";
+}
 
 export function Dashboard() {
   const [viewState, setViewState] = useState<ViewState>("idle");
@@ -35,6 +42,12 @@ export function Dashboard() {
   const selectionRequestIdRef = useRef(0);
   const sessionCacheRef = useRef<Map<string, Session>>(new Map());
   const detectionsCacheRef = useRef<Map<string, Detection[]>>(new Map());
+  // Mobile-LPR pose set in the sidebar.  Applies to whichever session
+  // (upload or test file) the user launches next.
+  const mobileLprPoseRef = useRef<MobileLprPose | null>(null);
+  const handleMobileLprPoseChange = useCallback((pose: MobileLprPose | null) => {
+    mobileLprPoseRef.current = pose;
+  }, []);
 
   // Fetch all sessions on mount
   useEffect(() => {
@@ -108,7 +121,7 @@ export function Dashboard() {
   const handleUpload = async (file: File, fps: number) => {
     try {
       setError(null);
-      const session = await createSession(file, fps);
+      const session = await createSession(file, fps, mobileLprPoseRef.current);
       setActiveSession(session);
       setDetections([]);
       sessionCacheRef.current.set(session.id, session);
@@ -127,7 +140,7 @@ export function Dashboard() {
     setPendingTestFile(filename);
     try {
       setError(null);
-      const session = await createSessionFromHardcodedTest(filename);
+      const session = await createSessionFromHardcodedTest(filename, mobileLprPoseRef.current);
       setActiveSession(session);
       setDetections([]);
       sessionCacheRef.current.set(session.id, session);
@@ -153,7 +166,7 @@ export function Dashboard() {
       sessionCacheRef.current.get(id) || sessions.find((session) => session.id === id) || null;
     if (cachedSession) {
       setActiveSession(cachedSession);
-      setViewState(cachedSession.status === "done" ? "results" : "processing");
+      setViewState(viewStateForStatus(cachedSession.status));
       sessionCacheRef.current.set(id, cachedSession);
     }
 
@@ -178,22 +191,11 @@ export function Dashboard() {
 
       setActiveSession(freshSession);
       setDetections(sessionDetections);
-      setViewState(freshSession.status === "done" ? "results" : "processing");
-
-      if (freshSession.status === "pending" || freshSession.status === "failed") {
-        void startSessionProcessing(freshSession.id)
-          .then((startedSession) => {
-            if (selectionRequestId !== selectionRequestIdRef.current) {
-              return;
-            }
-            setActiveSession(startedSession);
-            sessionCacheRef.current.set(startedSession.id, startedSession);
-            setViewState("processing");
-          })
-          .catch((err) => {
-            setError(err instanceof Error ? err.message : "Failed to start processing");
-          });
-      }
+      // Selecting a session never restarts processing — it only displays
+      // whatever is on disk.  "running" sessions go to ProcessingView so the
+      // poller picks up live updates; everything else (done/pending/failed)
+      // shows the existing detections in ResultsView.
+      setViewState(viewStateForStatus(freshSession.status));
     } catch (err) {
       if (selectionRequestId !== selectionRequestIdRef.current) {
         return;
@@ -360,6 +362,7 @@ export function Dashboard() {
               onSelectSession={handleSelectSession}
               onDeleteSession={handleDeleteSession}
               onRunHardcodedTest={handleRunHardcodedTest}
+              onMobileLprPoseChange={handleMobileLprPoseChange}
             />
           </div>
 

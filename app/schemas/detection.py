@@ -41,6 +41,12 @@ class DetectionOut(BaseModel):
     ticket_status: str | None = None
     ticket_expires_at: datetime | None = None
 
+    target_latitude: float | None = None
+    target_longitude: float | None = None
+    spot_match_status: Literal["MATCH", "WRONG_PLATE", "NO_SPOT_FOUND"] | None = None
+    target_distance_m: float | None = None
+    matched_spot_id: int | None = None
+
     created_at: datetime
     plate_id: uuid.UUID | None = None
 
@@ -112,4 +118,24 @@ class SessionOut(BaseModel):
     created_at: datetime
     ended_at: datetime | None = None
 
+    gps_latitude: float | None = None
+    gps_longitude: float | None = None
+    gps_heading_deg: float | None = None
+    gps_source: str | None = None
+    gps_accuracy_m: float | None = None
+    gps_validation_status: str | None = None
+    # Newline-separated list of soft-validation warnings.  Stored as TEXT
+    # (rather than JSONB) so the SQLite test harness doesn't need a shim,
+    # and split into ``gps_warnings`` below for the frontend.
+    gps_validation_warnings: str | None = None
+
     model_config = ConfigDict(from_attributes=True)
+
+    @computed_field  # type: ignore[prop-decorator]
+    @property
+    def gps_warnings(self) -> list[str]:
+        """Split the persisted newline-separated warning bundle into a list."""
+        raw = self.gps_validation_warnings
+        if not raw:
+            return []
+        return [line for line in raw.splitlines() if line.strip()]
