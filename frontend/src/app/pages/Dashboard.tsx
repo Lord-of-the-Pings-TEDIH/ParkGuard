@@ -291,7 +291,7 @@ export function Dashboard() {
               <div className="border-b border-border bg-card/80 px-3 py-2 backdrop-blur md:px-4">
                 <Button variant="outline" size="sm" onClick={handleReset}>
                   <ArrowLeft className="mr-2 h-4 w-4" />
-                  Back to upload
+                  Înapoi la încărcare
                 </Button>
               </div>
             )}

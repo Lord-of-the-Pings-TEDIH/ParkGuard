@@ -89,7 +89,7 @@ export function UploadZone({ onUpload, isProcessing }: UploadZoneProps) {
           RO-PLATE
         </h1>
         <p className="text-sm text-muted-foreground md:text-base">
-          License Plate Detection & Enforcement
+          Detectare și Monitorizare Numere Auto
         </p>
       </div>
 
@@ -111,14 +111,14 @@ export function UploadZone({ onUpload, isProcessing }: UploadZoneProps) {
         }}
         role="button"
         tabIndex={isProcessing ? -1 : 0}
-        aria-label="Select video file for processing"
+        aria-label="Selectează clip video pentru procesare"
       >
         <div className="p-8 text-center md:p-12">
           <div className="mx-auto mb-4 flex h-12 w-12 items-center justify-center rounded-full bg-gradient-to-br from-blue-500 to-indigo-600 md:h-16 md:w-16">
             <Upload className="h-6 w-6 text-white md:h-8 md:w-8" />
           </div>
           <p className="mb-2 text-base font-medium text-foreground md:text-lg">
-            {selectedFile ? selectedFile.name : "Drop video here"}
+            {selectedFile ? selectedFile.name : "Trageți clipul video aici"}
           </p>
           <p className="mb-4 text-xs text-muted-foreground md:text-sm">
             .mp4, .mov, .avi, .mkv
@@ -139,7 +139,7 @@ export function UploadZone({ onUpload, isProcessing }: UploadZoneProps) {
             }}
             disabled={isProcessing}
           >
-            Browse Files
+            Răsfoiește Fișierele
           </Button>
         </div>
       </div>
@@ -148,7 +148,7 @@ export function UploadZone({ onUpload, isProcessing }: UploadZoneProps) {
         <div className="w-full max-w-2xl space-y-4 rounded-lg border border-border bg-card p-6 shadow-lg">
           <div>
             <div className="mb-3">
-              <Label className="text-foreground">Sampling: {fps[0]} FPS</Label>
+              <Label className="text-foreground">Eșantionare: {fps[0]} FPS</Label>
             </div>
             <Slider
               value={fps}
@@ -163,9 +163,9 @@ export function UploadZone({ onUpload, isProcessing }: UploadZoneProps) {
           <div className="space-y-3 rounded-md border border-border bg-muted/30 p-3">
             <div className="flex items-center justify-between gap-3">
               <div className="space-y-0.5">
-                <Label className="text-foreground">Mobile-LPR mode</Label>
+                <Label className="text-foreground">Mod LPR Mobil</Label>
                 <p className="text-xs text-muted-foreground">
-                  Project plates to GPS &amp; check assigned parking spots
+                  Proiectează numerele pe GPS &amp; verifică locurile de parcare alocate
                 </p>
               </div>
               <Switch
@@ -180,7 +180,7 @@ export function UploadZone({ onUpload, isProcessing }: UploadZoneProps) {
             {mobileLprEnabled && (
               <div className="grid grid-cols-3 gap-2">
                 <div>
-                  <Label htmlFor="lpr-lat" className="text-xs">Latitude</Label>
+                  <Label htmlFor="lpr-lat" className="text-xs">Latitudine</Label>
                   <Input
                     id="lpr-lat"
                     inputMode="decimal"
@@ -190,7 +190,7 @@ export function UploadZone({ onUpload, isProcessing }: UploadZoneProps) {
                   />
                 </div>
                 <div>
-                  <Label htmlFor="lpr-lon" className="text-xs">Longitude</Label>
+                  <Label htmlFor="lpr-lon" className="text-xs">Longitudine</Label>
                   <Input
                     id="lpr-lon"
                     inputMode="decimal"
@@ -200,7 +200,7 @@ export function UploadZone({ onUpload, isProcessing }: UploadZoneProps) {
                   />
                 </div>
                 <div>
-                  <Label htmlFor="lpr-hdg" className="text-xs">Heading °</Label>
+                  <Label htmlFor="lpr-hdg" className="text-xs">Direcție °</Label>
                   <Input
                     id="lpr-hdg"
                     inputMode="decimal"
@@ -222,7 +222,7 @@ export function UploadZone({ onUpload, isProcessing }: UploadZoneProps) {
             disabled={isProcessing}
             className="w-full bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-700 hover:to-indigo-700"
           >
-            Process Video
+            Procesează Video
           </Button>
         </div>
       )}

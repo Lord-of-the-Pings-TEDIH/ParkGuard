@@ -76,7 +76,7 @@ export function ProcessingView({ session, detections, onCancel, onComplete }: Pr
                 className="border-red-500 bg-gradient-to-r from-red-50 to-orange-50 text-red-700 hover:from-red-100 hover:to-orange-100 dark:from-red-950 dark:to-orange-950 dark:text-red-400"
               >
                 <XCircle className="mr-2 h-4 w-4" />
-                Cancel
+                Anulează
               </Button>
             )}
           </div>
@@ -86,31 +86,31 @@ export function ProcessingView({ session, detections, onCancel, onComplete }: Pr
 
         <div className="grid grid-cols-2 gap-2 text-sm md:grid-cols-5 md:gap-3">
           <div className="rounded-lg border border-purple-200 bg-gradient-to-br from-purple-50 to-pink-50 p-2.5 dark:border-purple-800 dark:from-purple-950 dark:to-pink-950 md:p-3">
-            <div className="mb-1 text-xs text-purple-700 dark:text-purple-300">Frames</div>
+            <div className="mb-1 text-xs text-purple-700 dark:text-purple-300">Cadre</div>
             <div className="font-mono text-sm font-semibold text-purple-900 dark:text-purple-100 md:text-base">
               {session.frames_processed}/{session.frames_total}
             </div>
           </div>
           <div className="rounded-lg border border-cyan-200 bg-gradient-to-br from-cyan-50 to-blue-50 p-2.5 dark:border-cyan-800 dark:from-cyan-950 dark:to-blue-950 md:p-3">
-            <div className="mb-1 text-xs text-cyan-700 dark:text-cyan-300">Time</div>
+            <div className="mb-1 text-xs text-cyan-700 dark:text-cyan-300">Timp</div>
             <div className="font-mono text-sm font-semibold text-cyan-900 dark:text-cyan-100 md:text-base">
               {formatElapsedTime(session.created_at)}
             </div>
           </div>
           <div className="rounded-lg border border-blue-200 bg-gradient-to-br from-blue-50 to-indigo-50 p-2.5 dark:border-blue-800 dark:from-blue-950 dark:to-indigo-950 md:p-3">
-            <div className="mb-1 text-xs text-blue-700 dark:text-blue-300">Found</div>
+            <div className="mb-1 text-xs text-blue-700 dark:text-blue-300">Găsite</div>
             <div className="font-mono text-sm font-semibold text-blue-900 dark:text-blue-100 md:text-base">
               {stats.total_detections}
             </div>
           </div>
           <div className="rounded-lg border border-emerald-200 bg-gradient-to-br from-emerald-50 to-teal-50 p-2.5 dark:border-emerald-800 dark:from-emerald-950 dark:to-teal-950 md:p-3">
-            <div className="mb-1 text-xs text-emerald-700 dark:text-emerald-300">Unique</div>
+            <div className="mb-1 text-xs text-emerald-700 dark:text-emerald-300">Unice</div>
             <div className="font-mono text-sm font-semibold text-emerald-900 dark:text-emerald-100 md:text-base">
               {stats.unique_plates}
             </div>
           </div>
           <div className="col-span-2 rounded-lg border border-red-200 bg-gradient-to-br from-red-50 to-orange-50 p-2.5 dark:border-red-800 dark:from-red-950 dark:to-orange-950 md:col-span-1 md:p-3">
-            <div className="mb-1 text-xs text-red-700 dark:text-red-300">Unpaid</div>
+            <div className="mb-1 text-xs text-red-700 dark:text-red-300">Neplătite</div>
             <div className="font-mono text-sm font-semibold text-red-900 dark:text-red-100 md:text-base">
               {stats.unpaid_count}
             </div>
@@ -129,7 +129,7 @@ export function ProcessingView({ session, detections, onCancel, onComplete }: Pr
       <div className="min-h-0 flex-1 overflow-y-auto bg-background p-4 md:p-6">
         <div className="mb-4 flex flex-wrap items-center justify-between gap-2">
           <h3 className="font-medium text-foreground">
-            Detections
+            Detectări
           </h3>
           {session.status === "running" && (
             <motion.div
@@ -145,7 +145,7 @@ export function ProcessingView({ session, detections, onCancel, onComplete }: Pr
 
         {uniqueLiveDetections.length === 0 ? (
           <div className="flex h-64 items-center justify-center text-slate-500">
-            Waiting for valid detections...
+            Se așteaptă detectări valide...
           </div>
         ) : (
           <div className="space-y-3">

@@ -63,13 +63,13 @@ export function PlateSearch() {
   return (
     <div className="flex h-full min-h-0 flex-col border-border bg-card lg:border-l">
       <div className="border-b border-border bg-gradient-to-r from-cyan-50 to-blue-50 p-3 dark:from-cyan-950 dark:to-blue-950 md:p-4">
-        <h3 className="mb-3 font-medium text-foreground">Registry</h3>
+        <h3 className="mb-3 font-medium text-foreground">Registru</h3>
 
         <div className="space-y-2">
           <div className="relative">
             <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
             <Input
-              placeholder="Search plates..."
+              placeholder="Caută numere..."
               value={query}
               onChange={(e) => setQuery(e.target.value)}
               className="pl-9"
@@ -77,7 +77,7 @@ export function PlateSearch() {
           </div>
 
           <Input
-            placeholder="County code (e.g. B, CJ)"
+            placeholder="Cod județ (ex: B, CJ)"
             value={county}
             onChange={(e) =>
               setCounty(e.target.value.toUpperCase().replace(/[^A-Z]/g, "").slice(0, 2))
@@ -103,19 +103,19 @@ export function PlateSearch() {
 
           {loading && (
             <div className="py-8 text-center text-sm text-muted-foreground">
-              Searching...
+              Se caută...
             </div>
           )}
 
           {!loading && plates.length === 0 && (query || county) && (
             <div className="py-8 text-center text-sm text-muted-foreground">
-              No plates found
+              Nu s-au găsit numere
             </div>
           )}
 
           {!loading && plates.length === 0 && !query && !county && (
             <div className="py-8 text-center text-sm text-muted-foreground">
-              Search plates
+              Caută numere
             </div>
           )}
 
@@ -131,21 +131,21 @@ export function PlateSearch() {
 
               <div className="space-y-1 text-xs text-muted-foreground">
                 <div className="flex justify-between">
-                  <span>County:</span>
+                  <span>Județ:</span>
                   <span className="font-medium text-foreground">
                     {plate.county_name} ({plate.county_code})
                   </span>
                 </div>
                 <div className="flex justify-between">
-                  <span>First seen:</span>
+                  <span>Prima detectare:</span>
                   <span>{formatRelativeTime(plate.first_seen_at)}</span>
                 </div>
                 <div className="flex justify-between">
-                  <span>Last seen:</span>
+                  <span>Ultima detectare:</span>
                   <span>{formatRelativeTime(plate.last_seen_at)}</span>
                 </div>
                 <div className="flex justify-between">
-                  <span>Detections:</span>
+                  <span>Detectări:</span>
                   <span className="font-mono font-medium text-foreground">
                     {plate.seen_count}
                   </span>
