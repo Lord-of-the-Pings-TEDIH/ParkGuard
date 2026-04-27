@@ -99,13 +99,13 @@ export function DetectionCard({ detection, index }: DetectionCardProps) {
           </div>
 
           <div className="mt-2 flex flex-wrap items-center gap-3 text-xs text-muted-foreground">
-            <span>Confidence: {(detection.detection_confidence * 100).toFixed(1)}%</span>
+            <span>Acuratețe: {(detection.detection_confidence * 100).toFixed(1)}%</span>
             <span className="uppercase tracking-wide">
-              {detection.voting_tag === "final" ? "Final" : "Not final"}
+              {detection.voting_tag === "final" ? "Final" : "Nefinalizat"}
             </span>
-            <span>Seen: {detection.occurrences}x</span>
+            <span>Detectări: {detection.occurrences}x</span>
             {detection.ocr_raw_text !== detection.ocr_normalized_text && (
-              <span className="italic">Raw: {detection.ocr_raw_text}</span>
+              <span className="italic">Text brut: {detection.ocr_raw_text}</span>
             )}
           </div>
           {detection.target_latitude != null && detection.target_longitude != null && (
@@ -114,7 +114,7 @@ export function DetectionCard({ detection, index }: DetectionCardProps) {
             </div>
           )}
           <div className="mt-1 text-[10px] text-muted-foreground font-mono">
-            Annotation: {detection.plate_annotation}
+            Adnotare: {detection.plate_annotation}
           </div>
         </div>
       </div>

@@ -54,28 +54,28 @@ export function ResultsView({ session, detections, onReset }: ResultsViewProps) 
             className="border-blue-500 bg-gradient-to-r from-blue-50 to-indigo-50 text-blue-700 hover:from-blue-100 hover:to-indigo-100 dark:from-blue-950 dark:to-indigo-950 dark:text-blue-400"
           >
             <RotateCcw className="mr-2 h-4 w-4" />
-            New
+            Nou
           </Button>
         </div>
 
         <div className="grid grid-cols-2 gap-2 md:grid-cols-4 md:gap-3">
           <StatCard
-            label="Found"
+            label="Găsite"
             value={stats.total_detections}
             className="border-blue-200 bg-gradient-to-br from-blue-50 to-indigo-50 text-blue-700 dark:border-blue-800 dark:from-blue-950 dark:to-indigo-950 dark:text-blue-300"
           />
           <StatCard
-            label="Unique"
+            label="Unice"
             value={stats.unique_plates}
             className="border-purple-200 bg-gradient-to-br from-purple-50 to-pink-50 text-purple-700 dark:border-purple-800 dark:from-purple-950 dark:to-pink-950 dark:text-purple-300"
           />
           <StatCard
-            label="Paid"
+            label="Plătite"
             value={stats.active_count}
             className="border-green-200 bg-gradient-to-br from-green-50 to-emerald-50 text-green-700 dark:border-green-800 dark:from-green-950 dark:to-emerald-950 dark:text-green-300"
           />
           <StatCard
-            label="Unpaid"
+            label="Neplătite"
             value={stats.unpaid_count}
             className="border-red-200 bg-gradient-to-br from-red-50 to-orange-50 text-red-700 dark:border-red-800 dark:from-red-950 dark:to-orange-950 dark:text-red-300"
             urgent={stats.unpaid_count > 0}
@@ -86,7 +86,7 @@ export function ResultsView({ session, detections, onReset }: ResultsViewProps) 
       {/* Detection results */}
       <div className="min-h-0 flex-1 overflow-y-auto bg-background p-4 md:p-6">
         <div className="mb-4 flex flex-wrap items-center justify-between gap-2">
-          <h3 className="font-medium text-foreground">Detections</h3>
+          <h3 className="font-medium text-foreground">Detectări</h3>
           <span className="rounded-full bg-gradient-to-r from-blue-100 to-indigo-100 px-3 py-1 text-sm font-medium text-blue-700 dark:from-blue-900 dark:to-indigo-900 dark:text-blue-300">
             {detections.length}
           </span>
@@ -94,7 +94,7 @@ export function ResultsView({ session, detections, onReset }: ResultsViewProps) 
 
         {detections.length === 0 ? (
           <div className="flex h-64 items-center justify-center text-slate-500">
-            No detections found
+            Nu s-au găsit detectări
           </div>
         ) : (
           <div className="space-y-3">

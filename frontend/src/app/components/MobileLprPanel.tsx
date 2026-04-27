@@ -44,9 +44,9 @@ export function MobileLprPanel({ onPoseChange }: MobileLprPanelProps) {
     <div className="space-y-2 rounded-md border border-border bg-muted/30 p-3">
       <div className="flex items-center justify-between gap-3">
         <div className="space-y-0.5">
-          <Label className="text-foreground">Mobile-LPR</Label>
+          <Label className="text-foreground">LPR Mobil</Label>
           <p className="text-[11px] leading-tight text-muted-foreground">
-            GPS pose for the next session you launch
+            Poziția GPS pentru următoarea sesiune lansată
           </p>
         </div>
         <Switch checked={enabled} onCheckedChange={setEnabled} />
@@ -78,7 +78,7 @@ export function MobileLprPanel({ onPoseChange }: MobileLprPanelProps) {
               />
             </div>
             <div>
-              <Label htmlFor="lpr-hdg" className="text-[10px]">Heading °</Label>
+              <Label htmlFor="lpr-hdg" className="text-[10px]">Direcție °</Label>
               <Input
                 id="lpr-hdg"
                 inputMode="decimal"
@@ -91,7 +91,7 @@ export function MobileLprPanel({ onPoseChange }: MobileLprPanelProps) {
           </div>
           {isInvalid && (
             <p className="text-[10px] text-red-600 dark:text-red-400">
-              Lat -90..90, Lon -180..180, heading any number.
+              Lat -90..90, Lon -180..180, direcția orice număr.
             </p>
           )}
         </>

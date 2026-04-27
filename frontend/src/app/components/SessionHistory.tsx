@@ -31,7 +31,7 @@ export function SessionHistory({
   return (
     <div className="flex h-full min-h-0 flex-col border-border bg-card lg:border-l">
       <div className="border-b border-border bg-gradient-to-r from-purple-50 to-pink-50 p-3 dark:from-purple-950 dark:to-pink-950 md:p-4">
-        <h3 className="font-medium text-foreground">Sessions</h3>
+        <h3 className="font-medium text-foreground">Sesiuni</h3>
         <p className="text-xs text-muted-foreground">{sessions.length} procesări</p>
       </div>
 
@@ -43,7 +43,7 @@ export function SessionHistory({
           {testFiles.length > 0 && (
             <>
               <div className="mb-2 text-xs font-medium uppercase tracking-wide text-muted-foreground">
-                Uploads hardcodate
+                Încărcări predefinite
               </div>
               {testFiles.map((filename) => (
                 <button
@@ -118,7 +118,7 @@ export function SessionHistory({
                       e.stopPropagation();
                       onDeleteSession(session.id);
                     }}
-                    title="Delete session"
+                    title="Șterge sesiunea"
                   >
                     <Trash2 className="h-3 w-3" />
                   </Button>
@@ -132,13 +132,13 @@ export function SessionHistory({
                   {isPendingSelection && (
                     <span className="inline-flex items-center gap-1 text-[10px] font-medium text-blue-700 dark:text-blue-300">
                       <Loader2 className="h-3 w-3 animate-spin" />
-                      Loading
+                      Se încarcă
                     </span>
                   )}
                 </div>
 
                 <div className="grid grid-cols-2 gap-2 text-xs text-muted-foreground">
-                  <div>Frames: {session.frames_processed}</div>
+                  <div>Cadre: {session.frames_processed}</div>
                   <div className="text-right">{formatRelativeTime(session.created_at)}</div>
                 </div>
               </motion.div>
@@ -147,7 +147,7 @@ export function SessionHistory({
 
           {sessions.length === 0 && (
             <div className="py-12 text-center text-sm text-slate-500">
-              No sessions yet
+              Nu există sesiuni încă
             </div>
           )}
         </div>
@@ -158,10 +158,10 @@ export function SessionHistory({
 
 function StatusBadge({ status }: { status: Session["status"] }) {
   const config = {
-    pending: { label: "Pending", className: "bg-gradient-to-r from-slate-100 to-gray-100 text-slate-700 dark:from-slate-800 dark:to-gray-800 dark:text-slate-300" },
-    running: { label: "Running", className: "bg-gradient-to-r from-amber-100 to-orange-100 text-amber-700 dark:from-amber-900 dark:to-orange-900 dark:text-amber-300" },
-    done: { label: "Done", className: "bg-gradient-to-r from-green-100 to-emerald-100 text-green-700 dark:from-green-900 dark:to-emerald-900 dark:text-green-300" },
-    failed: { label: "Failed", className: "bg-gradient-to-r from-red-100 to-orange-100 text-red-700 dark:from-red-900 dark:to-orange-900 dark:text-red-300" },
+    pending: { label: "În așteptare", className: "bg-gradient-to-r from-slate-100 to-gray-100 text-slate-700 dark:from-slate-800 dark:to-gray-800 dark:text-slate-300" },
+    running: { label: "În rulare", className: "bg-gradient-to-r from-amber-100 to-orange-100 text-amber-700 dark:from-amber-900 dark:to-orange-900 dark:text-amber-300" },
+    done: { label: "Finalizat", className: "bg-gradient-to-r from-green-100 to-emerald-100 text-green-700 dark:from-green-900 dark:to-emerald-900 dark:text-green-300" },
+    failed: { label: "Eșuat", className: "bg-gradient-to-r from-red-100 to-orange-100 text-red-700 dark:from-red-900 dark:to-orange-900 dark:text-red-300" },
   };
 
   const { label, className } = config[status];

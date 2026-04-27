@@ -1,4 +1,5 @@
 import { formatDistanceToNow, differenceInSeconds, format } from "date-fns";
+import { ro } from "date-fns/locale";
 import type { TicketStatus, SessionStats, Detection } from "../types";
 
 export function formatTimeRemaining(expiresAt: string | null): string {
@@ -8,7 +9,7 @@ export function formatTimeRemaining(expiresAt: string | null): string {
   const expires = new Date(expiresAt);
   const seconds = differenceInSeconds(expires, now);
 
-  if (seconds < 0) return "Expired";
+  if (seconds < 0) return "Expirat";
   if (seconds < 60) return `${seconds}s`;
   if (seconds < 3600) return `${Math.floor(seconds / 60)}m`;
   if (seconds < 86400) return `${Math.floor(seconds / 3600)}h`;
@@ -38,11 +39,11 @@ export function formatDuration(
 }
 
 export function formatRelativeTime(dateString: string): string {
-  return formatDistanceToNow(new Date(dateString), { addSuffix: true });
+  return formatDistanceToNow(new Date(dateString), { addSuffix: true, locale: ro });
 }
 
 export function formatDateTime(dateString: string): string {
-  return format(new Date(dateString), "MMM d, HH:mm");
+  return format(new Date(dateString), "MMM d, HH:mm", { locale: ro });
 }
 
 export function calculateStats(detections: Detection[]): SessionStats {
@@ -79,13 +80,13 @@ export function getTicketStatusColor(status: TicketStatus): string {
 export function getTicketStatusLabel(status: TicketStatus): string {
   switch (status) {
     case "active":
-      return "PAID";
+      return "PLĂTIT";
     case "subscription":
-      return "SUB";
+      return "ABONAMENT";
     case "grace":
-      return "GRACE";
+      return "GRAȚIE";
     case "none":
-      return "⚠ UNPAID";
+      return "⚠ NEPLĂTIT";
     case "unknown":
     default:
       return "?";
