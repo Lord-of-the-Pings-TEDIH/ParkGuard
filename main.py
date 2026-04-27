@@ -1,5 +1,10 @@
+import os
 from contextlib import asynccontextmanager
 from pathlib import Path
+
+os.environ["PADDLE_PDX_DISABLE_MODEL_SOURCE_CHECK"] = "True"
+os.environ["FLAGS_use_mkldnn"] = "0"
+os.environ["FLAGS_use_pir_api"] = "0"
 
 from fastapi import FastAPI
 from fastapi.exceptions import RequestValidationError
@@ -29,16 +34,29 @@ async def lifespan(app: FastAPI):
         print(f"Application startup: connecting to {settings.DATABASE_URL} ...")
         await init_db()
         print("Database tables created successfully.")
-        
+
         # Seed test data if needed
         from app.core.database import AsyncSessionLocal
         from app.core.seed import seed_db
         async with AsyncSessionLocal() as session:
             await seed_db(session)
-            
+
     except Exception as e:
         print(f"Database initialization failed: {e}")
         raise
+
+    # Pre-warm the OCR model in a background thread so the first processing
+    # job does not block on model loading.  The wait is visible in server
+    # startup logs rather than appearing as a hung processing request.
+    import asyncio
+    from app.routers.sessions import _get_plate_reader
+    print("Pre-warming OCR model (this may take 30–60 s on first run)…")
+    try:
+        await asyncio.get_event_loop().run_in_executor(None, _get_plate_reader)
+        print("OCR model ready.")
+    except Exception as exc:
+        print(f"OCR pre-warm failed (will retry on first request): {exc}")
+
     yield
     # Teardown
     from app.core.database import async_engine

@@ -106,10 +106,14 @@ class Detection(Base):
 
     detection_confidence: Mapped[float] = mapped_column(Float, nullable=False)
 
-    # OCR results
+    # OCR results.  ``ocr_normalized_text`` doubles as a diagnostic field —
+    # ``normalize_plate()`` returns ``"INVALID: <reason>"`` when the candidate
+    # fails Romanian-format validation, and several reasons (e.g. "format
+    # standard: ultimele 3 caractere sunt predominant cifre") run past 50
+    # characters.  Sized to fit the longest existing reason plus headroom.
     ocr_raw_text: Mapped[str | None] = mapped_column(String(50), nullable=True)
     ocr_normalized_text: Mapped[str | None] = mapped_column(
-        String(50), nullable=True
+        String(120), nullable=True
     )
     is_valid_ro_plate: Mapped[bool] = mapped_column(
         Boolean, default=False

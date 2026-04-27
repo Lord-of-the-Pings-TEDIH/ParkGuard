@@ -1,8 +1,8 @@
 import { motion } from "motion/react";
-import { RotateCcw, CheckCircle } from "lucide-react";
+import { RotateCcw, CheckCircle, Clock } from "lucide-react";
 import { Button } from "./ui/button";
 import { DetectionCard } from "./DetectionCard";
-import { calculateStats } from "../utils/format";
+import { calculateStats, formatDuration } from "../utils/format";
 import type { Session, Detection } from "../types";
 
 interface ResultsViewProps {
@@ -13,6 +13,7 @@ interface ResultsViewProps {
 
 export function ResultsView({ session, detections, onReset }: ResultsViewProps) {
   const stats = calculateStats(detections);
+  const duration = formatDuration(session.created_at, session.ended_at);
 
   return (
     <div className="flex h-full min-h-0 flex-col">
@@ -32,7 +33,18 @@ export function ResultsView({ session, detections, onReset }: ResultsViewProps) 
                 <h2 className="truncate text-lg font-bold text-foreground md:text-xl">
                   {session.source_filename}
                 </h2>
-                <p className="text-xs text-muted-foreground md:text-sm">Finalizat</p>
+                <p className="flex items-center gap-1.5 text-xs text-muted-foreground md:text-sm">
+                  <span>Complete</span>
+                  {duration && (
+                    <>
+                      <span aria-hidden>·</span>
+                      <span className="inline-flex items-center gap-1">
+                        <Clock className="h-3 w-3" />
+                        {duration}
+                      </span>
+                    </>
+                  )}
+                </p>
               </div>
             </div>
           </div>
