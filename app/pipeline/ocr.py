@@ -19,6 +19,7 @@ import logging
 import os
 import re
 import sys
+import threading
 import time
 from typing import Any
 
@@ -367,6 +368,14 @@ class PlateReader:
         # "ocr" (positional only), or "predict".
         self._ocr_call_mode: str | None = None
 
+        # PaddleOCR's TextRecognition predictor holds mutable internal buffers
+        # and is not safe under concurrent access.  When multiple processing
+        # sessions dispatch OCR through asyncio.to_thread they all hit the
+        # singleton PlateReader from different threads — without this lock the
+        # second caller can corrupt the first one's intermediate tensors and
+        # produce empty / wrong text or crash the runtime.
+        self._infer_lock = threading.Lock()
+
         # --- FSM Beam Search decoder ---
         self._use_fsm = use_fsm_decode
         self._fsm_beam_width = fsm_beam_width
@@ -424,32 +433,33 @@ class PlateReader:
 
     def _invoke_ocr(self, ocr_input: np.ndarray) -> Any:
         """Call the underlying PaddleOCR reader, caching which API works."""
-        mode = self._ocr_call_mode
-        if mode == "legacy":
-            return self.reader.ocr(ocr_input, det=False, rec=True, cls=False)
-        if mode == "ocr":
-            return self.reader.ocr(ocr_input)
-        if mode == "predict":
-            return self.reader.predict(ocr_input)
+        with self._infer_lock:
+            mode = self._ocr_call_mode
+            if mode == "legacy":
+                return self.reader.ocr(ocr_input, det=False, rec=True, cls=False)
+            if mode == "ocr":
+                return self.reader.ocr(ocr_input)
+            if mode == "predict":
+                return self.reader.predict(ocr_input)
 
-        # First call: probe once and remember.
-        if hasattr(self.reader, "ocr"):
-            try:
-                result = self.reader.ocr(ocr_input, det=False, rec=True, cls=False)
-                self._ocr_call_mode = "legacy"
+            # First call: probe once and remember.
+            if hasattr(self.reader, "ocr"):
+                try:
+                    result = self.reader.ocr(ocr_input, det=False, rec=True, cls=False)
+                    self._ocr_call_mode = "legacy"
+                    return result
+                except TypeError as exc:
+                    msg = str(exc)
+                    if "unexpected keyword argument" not in msg:
+                        raise
+                result = self.reader.ocr(ocr_input)
+                self._ocr_call_mode = "ocr"
                 return result
-            except TypeError as exc:
-                msg = str(exc)
-                if "unexpected keyword argument" not in msg:
-                    raise
-            result = self.reader.ocr(ocr_input)
-            self._ocr_call_mode = "ocr"
-            return result
-        if hasattr(self.reader, "predict"):
-            result = self.reader.predict(ocr_input)
-            self._ocr_call_mode = "predict"
-            return result
-        raise RuntimeError("PaddleOCR reader has no supported OCR method")
+            if hasattr(self.reader, "predict"):
+                result = self.reader.predict(ocr_input)
+                self._ocr_call_mode = "predict"
+                return result
+            raise RuntimeError("PaddleOCR reader has no supported OCR method")
 
     def _invoke_ocr_batch(self, inputs: list[np.ndarray]) -> list[Any]:
         """Run a single batched OCR call covering ``inputs`` in order.
@@ -469,14 +479,15 @@ class PlateReader:
 
         mode = self._ocr_call_mode
         try:
-            if mode == "legacy":
-                result = self.reader.ocr(inputs, det=False, rec=True, cls=False)
-            elif mode == "ocr":
-                result = self.reader.ocr(inputs)
-            elif mode == "predict":
-                result = self.reader.predict(inputs)
-            else:
-                raise RuntimeError("PaddleOCR reader has no supported OCR method")
+            with self._infer_lock:
+                if mode == "legacy":
+                    result = self.reader.ocr(inputs, det=False, rec=True, cls=False)
+                elif mode == "ocr":
+                    result = self.reader.ocr(inputs)
+                elif mode == "predict":
+                    result = self.reader.predict(inputs)
+                else:
+                    raise RuntimeError("PaddleOCR reader has no supported OCR method")
         except Exception as exc:
             logger.debug(
                 "Batched OCR failed (mode=%s, n=%d): %s — falling back to per-image",

@@ -20,6 +20,7 @@ from typing import Protocol, TypeAlias
 import cv2
 import numpy as np
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
@@ -592,32 +593,56 @@ def _track_best_plate(track: PlateTrack) -> tuple[str | None, int, float, float]
     return best_plate, best_votes, best_avg_conf, stability
 
 
-async def _get_or_create_plate(
-    normalized_text: str,
-    db: AsyncSession,
-) -> Plate:
-    """Return an existing Plate row or insert a new one."""
+async def _fetch_and_bump_plate(
+    normalized_text: str, db: AsyncSession
+) -> Plate | None:
+    """Return an existing Plate row with its seen_count bumped, or None."""
     result = await db.execute(
         select(Plate).where(Plate.normalized_text == normalized_text).limit(1)
     )
     plate = result.scalars().first()
-    if plate is not None:
-        plate.seen_count += 1
-        plate.last_seen_at = datetime.now(UTC)
-        # Backfill county_code on existing rows that pre-date the registry
-        # filter — keeps the sidebar's county column populated without a
-        # migration script.
-        if plate.county_code is None:
-            plate.county_code = extract_county(normalized_text)
-        await db.flush()
-        return plate
+    if plate is None:
+        return None
+    plate.seen_count += 1
+    plate.last_seen_at = datetime.now(UTC)
+    # Backfill county_code on existing rows that pre-date the registry
+    # filter — keeps the sidebar's county column populated without a
+    # migration script.
+    if plate.county_code is None:
+        plate.county_code = extract_county(normalized_text)
+    await db.flush()
+    return plate
+
+
+async def _get_or_create_plate(
+    normalized_text: str,
+    db: AsyncSession,
+) -> Plate:
+    """Return an existing Plate row or insert a new one.
+
+    Concurrent-safe: when two sessions race to insert the same plate text the
+    loser hits IntegrityError on the unique constraint of plates.normalized_text.
+    The insert is wrapped in a SAVEPOINT so that failure rolls back only the
+    failed insert (not the outer per-session transaction); the loser then
+    re-fetches the row inserted by the winner and bumps its seen_count.
+    """
+    existing = await _fetch_and_bump_plate(normalized_text, db)
+    if existing is not None:
+        return existing
 
     plate = Plate(
         normalized_text=normalized_text,
         county_code=extract_county(normalized_text),
     )
     db.add(plate)
-    await db.flush()
+    try:
+        async with db.begin_nested():
+            await db.flush()
+    except IntegrityError:
+        winner = await _fetch_and_bump_plate(normalized_text, db)
+        if winner is None:
+            raise
+        return winner
     return plate
 
 
@@ -1026,8 +1051,13 @@ async def process_session(
                     batch_crops = [staged[idx]["crop"] for idx in batch_indices]
                     batch_types = [staged[idx]["plate_type"] for idx in batch_indices]
                     try:
-                        results = recognize_batch(
-                            batch_crops, plate_types=batch_types
+                        # Off the event loop so other concurrent sessions can
+                        # interleave their DB writes / SSE pushes while this
+                        # session's PaddleOCR forward pass is running.
+                        results = await asyncio.to_thread(
+                            recognize_batch,
+                            batch_crops,
+                            plate_types=batch_types,
                         )
                     except Exception as exc:
                         logger.debug(
@@ -1071,55 +1101,26 @@ async def process_session(
 
                     # Step 2 — fall back to the per-detection multi-angle /
                     # deskew pass when the batched result was empty or didn't
-                    # clear the early-exit threshold.
+                    # clear the early-exit threshold.  The whole CPU-bound
+                    # chain (deskew, sharpness, multi-angle OCR) is dispatched
+                    # to a worker thread so concurrent sessions' async work
+                    # (DB writes, SSE pushes, frame reads) can interleave on
+                    # the event loop while this one's crops are crunched.
                     needs_fallback = not (
                         candidate.is_valid
                         and candidate.confidence >= early_exit_conf
                     )
                     if needs_fallback:
-                        rectified = deskew_plate(crop)
-                        if rectified.size == 0:
-                            rectified = crop
-
-                        angles_for_detection = (
-                            (0.0,) if confidence >= 0.85 else ocr_angles
+                        sweep_candidate = await asyncio.to_thread(
+                            _per_detection_ocr_sweep,
+                            recognize,
+                            crop,
+                            detection_confidence=confidence,
+                            plate_type=plate_type_str,
+                            ocr_angles=ocr_angles,
+                            early_exit_conf=early_exit_conf,
+                            min_sharpness=min_sharpness,
                         )
-
-                        sharpness = _sharpness_score(rectified)
-                        if sharpness >= min_sharpness:
-                            ocr_input = (
-                                _enhance_motion_blur(rectified)
-                                if sharpness < min_sharpness * 1.35
-                                else rectified
-                            )
-                            sweep_candidate = _best_ocr_candidate(
-                                recognize,
-                                ocr_input,
-                                ocr_angles=angles_for_detection,
-                                plate_type=plate_type_str,
-                                early_exit_conf=early_exit_conf,
-                            )
-                        else:
-                            sweep_candidate = _best_ocr_candidate(
-                                recognize,
-                                crop,
-                                ocr_angles=angles_for_detection,
-                                plate_type=plate_type_str,
-                                early_exit_conf=early_exit_conf,
-                            )
-
-                        if not sweep_candidate.raw_text:
-                            fallback_candidate = _best_ocr_candidate(
-                                recognize,
-                                crop,
-                                ocr_angles=ocr_angles,
-                                plate_type=plate_type_str,
-                                early_exit_conf=early_exit_conf,
-                            )
-                            sweep_candidate = _prefer_candidate(
-                                sweep_candidate, fallback_candidate
-                            )
-
                         candidate = _prefer_candidate(candidate, sweep_candidate)
 
                     if candidate.raw_text and candidate.confidence >= min_ocr_conf:
