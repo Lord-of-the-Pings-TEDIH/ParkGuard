@@ -116,8 +116,14 @@ async def test_wrong_plate_when_someone_else_parked_in_spot(db: AsyncSession) ->
 
 
 @pytest.mark.asyncio
-async def test_unreserved_spot_treated_as_wrong_plate(db: AsyncSession) -> None:
-    """An assigned_plate=NULL spot has no rightful owner — any plate is wrong."""
+async def test_unreserved_spot_excluded_from_match(db: AsyncSession) -> None:
+    """An unreserved (assigned_plate=NULL) spot must not produce a verdict.
+
+    The validator filters out unreserved spots in the SQL prefilter so they
+    cannot trigger WRONG_PLATE.  Real-world reasoning: a spot with no owner
+    has no one to wrong, and feeding such "verdicts" to the suspicion-scoring
+    pipeline would generate noise on free public bays.
+    """
     spot = await _seed_lot_with_spot(db, lat=46.7700, lon=23.5895, plate=None)
 
     result = await validate_parking_at_location(
@@ -127,7 +133,8 @@ async def test_unreserved_spot_treated_as_wrong_plate(db: AsyncSession) -> None:
         db=db,
     )
 
-    assert result.status == "WRONG_PLATE"
+    assert result.status == "NO_SPOT_FOUND"
+    assert result.spot is None
 
 
 @pytest.mark.asyncio
@@ -203,5 +210,9 @@ async def test_radius_must_be_positive(db: AsyncSession) -> None:
         )
 
 
-def test_default_radius_is_three_metres() -> None:
-    assert DEFAULT_SEARCH_RADIUS_M == 3.0
+def test_default_radius_matches_smartphone_gps_uncertainty() -> None:
+    # 40 m covers the realistic worst case of consumer GPS in urban canyons
+    # (5–15 m open-sky, 20–40 m dense block).  Tightening this back to a few
+    # metres breaks every spot-match in real footage; loosening past 50 m
+    # starts producing cross-street false matches in dense neighbourhoods.
+    assert DEFAULT_SEARCH_RADIUS_M == 40.0
