@@ -229,8 +229,8 @@ def _validated_metadata_pose(
 
     warnings: list[str] = []
     # iOS' horizontal-accuracy estimate is in metres — anything beyond ~25 m
-    # (consumer GPS in an urban canyon) is too coarse for a 3 m parking-spot
-    # match radius, so we keep it but warn.
+    # (consumer GPS in an urban canyon) represents significant uncertainty
+    # relative to the 40 m spot-match radius, so we keep it but warn.
     if metadata.accuracy_m is not None and metadata.accuracy_m > 25.0:
         warnings.append(
             f"video metadata GPS accuracy {metadata.accuracy_m:.1f} m "
@@ -576,6 +576,12 @@ async def delete_session(session_id: uuid.UUID, db: AsyncSession = Depends(get_d
     await db.execute(
         delete(TicketCheck).where(TicketCheck.detection_id.in_(detection_ids_stmt))
     )
+
+    # Must run before the session row is deleted: SpotOccupancyEvent.session_id
+    # has ondelete=SET NULL, so after deletion we can't identify which events
+    # belonged to this session.
+    from app.services.occupancy import cleanup_session_occupancy
+    await cleanup_session_occupancy(session_id, db)
 
     source_filename = session.source_filename
     await db.delete(session)

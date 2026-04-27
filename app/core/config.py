@@ -70,8 +70,11 @@ class Settings(BaseSettings):
     # Plate centre is assumed at this height above the ground.
     MOBILE_LPR_PLATE_HEIGHT_M: float = 0.6
     # Search radius (metres) used by validate_parking_at_location to bind
-    # a projected GPS point to a registered ParkingSpot.
-    MOBILE_LPR_SEARCH_RADIUS_M: float = 3.0
+    # a projected GPS point to a registered ParkingSpot.  Consumer GPS on a
+    # smartphone is typically accurate to 5–15 m in open sky and 20–40 m in
+    # urban canyons.  40 m covers the realistic worst case while staying tight
+    # enough to avoid cross-street false matches in dense neighbourhoods.
+    MOBILE_LPR_SEARCH_RADIUS_M: float = 40.0
     # Hard cap on the projected distance.  Plates at or above the geometric
     # horizon (typical of distant cars in handheld portrait video) are
     # clamped to this distance so every detection still produces a GPS

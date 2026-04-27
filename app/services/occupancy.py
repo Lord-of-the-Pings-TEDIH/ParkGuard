@@ -51,7 +51,7 @@ from collections import defaultdict
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 
-from sqlalchemy import select, update
+from sqlalchemy import delete, func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.occupancy import SpotOccupancyEvent, SpotOccupancyRecord
@@ -286,3 +286,62 @@ async def reset_occupancy_record(record_id: int, db: AsyncSession) -> bool:
     record.is_flagged = False
     await db.flush()
     return True
+
+
+async def cleanup_session_occupancy(session_id: uuid.UUID, db: AsyncSession) -> None:
+    """Remove occupancy events tied to a session and recompute affected records.
+
+    Must be called BEFORE the Session row is deleted — the FK on
+    SpotOccupancyEvent.session_id is SET NULL on cascade, so once the session
+    is gone we can no longer identify which events belonged to it.
+
+    For each (spot, plate) pair that loses events:
+    - If no events remain at all → delete the record entirely.
+    - Otherwise → recompute score/flag from the surviving events.
+    """
+    # Collect affected (spot_id, plate_text) pairs before deleting anything.
+    pairs_result = await db.execute(
+        select(SpotOccupancyEvent.spot_id, SpotOccupancyEvent.plate_text)
+        .where(SpotOccupancyEvent.session_id == session_id)
+        .distinct()
+    )
+    affected_pairs = pairs_result.all()
+
+    if not affected_pairs:
+        return
+
+    await db.execute(
+        delete(SpotOccupancyEvent).where(SpotOccupancyEvent.session_id == session_id)
+    )
+    await db.flush()
+
+    for spot_id, plate_text in affected_pairs:
+        # Count all remaining events (not just the 30-day window) to decide
+        # whether to keep or delete the record.
+        count_result = await db.execute(
+            select(func.count(SpotOccupancyEvent.id))
+            .where(SpotOccupancyEvent.spot_id == spot_id)
+            .where(SpotOccupancyEvent.plate_text == plate_text)
+        )
+        remaining = count_result.scalar_one()
+
+        record_result = await db.execute(
+            select(SpotOccupancyRecord)
+            .where(SpotOccupancyRecord.spot_id == spot_id)
+            .where(SpotOccupancyRecord.plate_text == plate_text)
+            .limit(1)
+        )
+        record = record_result.scalars().first()
+        if record is None:
+            continue
+
+        if remaining == 0:
+            await db.delete(record)
+        else:
+            score, distinct_days = await _recompute_score(spot_id, plate_text, db)
+            record.event_count = remaining
+            record.distinct_days = distinct_days
+            record.accumulated_score = score
+            record.is_flagged = score >= FLAG_THRESHOLD
+
+    await db.flush()

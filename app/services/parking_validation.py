@@ -25,7 +25,7 @@ from app.models.parking_spot import ParkingSpot
 
 SpotMatchStatus = Literal["MATCH", "WRONG_PLATE", "NO_SPOT_FOUND"]
 
-DEFAULT_SEARCH_RADIUS_M: float = 3.0
+DEFAULT_SEARCH_RADIUS_M: float = 40.0
 EARTH_RADIUS_M: float = 6_371_000.0
 _METERS_PER_DEGREE_LAT: float = 111_320.0
 
@@ -80,9 +80,13 @@ async def validate_parking_at_location(
     delta_lat = radius_m / _METERS_PER_DEGREE_LAT
     delta_lon = radius_m / (_METERS_PER_DEGREE_LAT * cos_lat)
 
+    # Only consider reserved spots (assigned_plate IS NOT NULL).  An unreserved
+    # spot has no owner to wrong, so it must not trigger a WRONG_PLATE result
+    # or contribute to the occupancy-scoring pipeline.
     stmt = select(ParkingSpot).where(
         ParkingSpot.latitude.is_not(None),
         ParkingSpot.longitude.is_not(None),
+        ParkingSpot.assigned_plate.is_not(None),
         ParkingSpot.latitude.between(target_lat - delta_lat, target_lat + delta_lat),
         ParkingSpot.longitude.between(target_lon - delta_lon, target_lon + delta_lon),
     )
@@ -104,12 +108,9 @@ async def validate_parking_at_location(
     if nearest is None:
         return SpotMatch(status="NO_SPOT_FOUND", spot=None, distance_m=None)
 
-    expected = (
-        _canonical_plate_text(nearest.assigned_plate)
-        if nearest.assigned_plate
-        else ""
-    )
+    # nearest.assigned_plate is guaranteed non-NULL by the query filter above.
+    expected = _canonical_plate_text(nearest.assigned_plate)  # type: ignore[arg-type]
     actual = _canonical_plate_text(plate_text)
 
-    status: SpotMatchStatus = "MATCH" if expected and expected == actual else "WRONG_PLATE"
+    status: SpotMatchStatus = "MATCH" if expected == actual else "WRONG_PLATE"
     return SpotMatch(status=status, spot=nearest, distance_m=nearest_distance)
