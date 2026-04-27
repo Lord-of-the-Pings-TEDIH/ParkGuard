@@ -11,25 +11,101 @@ from app.models.parking_spot import ParkingSpot
 logger = logging.getLogger(__name__)
 
 
-# Mobile-LPR demo coordinates: a small block in central Cluj-Napoca.  Spots
-# are spaced ~6 m apart so a 3 m search radius cleanly disambiguates them.
-# Real deployments will overwrite these via the /api/parking/spots endpoint
-# or a CSV import; this is just enough data to demo the feature end-to-end.
-_DEMO_PARKING_LOT_NAME = "Cluj-Napoca Centru — Demo"
+# Residential parking demo: 10 reserved spots placed at the GPS coordinates
+# where the bundled video1.MOV was actually filmed (Sălaj county, lat≈47.258,
+# lon≈23.254).  Each spot has an ``assigned_plate`` for a fictional resident
+# that is *not* one of the plates detected in video1, so every car visible
+# in that video naturally trips the WRONG_PLATE branch of the validator and
+# feeds the suspicious-occupancy scoring engine.
+#
+# Spot positions are spread along latitude in ~3 m steps (delta 0.00003°)
+# so each plate's projected coordinate lands closest to a single owner.
+# Spaced tighter than the 40 m search radius on purpose: it is realistic for
+# a residential block, and the haversine refinement in
+# validate_parking_at_location picks the nearest spot deterministically.
+_DEMO_PARKING_LOT_NAME = "Bloc Rezidențial — Strada Demo"
+_DEMO_PARKING_LOT_LOCATION = "Zalău, jud. Sălaj"
 _DEMO_SPOTS: list[tuple[str, float, float, str | None]] = [
     # (label, latitude, longitude, assigned_plate)
-    ("A-01", 46.770100, 23.589500, "B11AAA"),
-    ("A-02", 46.770155, 23.589500, "B22BBB"),
-    ("A-03", 46.770210, 23.589500, "CJ05XYZ"),
-    ("A-04", 46.770265, 23.589500, None),  # unreserved spot
+    ("A-01", 47.258250, 23.254340, "MM 88 OWN"),
+    ("A-02", 47.258280, 23.254340, "AB 12 ION"),
+    ("A-03", 47.258310, 23.254340, "BV 22 POP"),
+    ("A-04", 47.258340, 23.254340, "SB 33 STN"),
+    ("A-05", 47.258370, 23.254340, "B 99 GRG"),
+    ("A-06", 47.258400, 23.254340, "TM 11 RDU"),
+    ("A-07", 47.258430, 23.254340, "CT 44 ELN"),
+    ("A-08", 47.258460, 23.254340, "AR 55 VLA"),
+    ("A-09", 47.258490, 23.254340, "DJ 66 ANA"),
+    ("A-10", 47.258520, 23.254340, "GL 77 MIH"),
 ]
+
+async def _seed_residential_lot(session: AsyncSession) -> None:
+    """Idempotent residential-lot seeding — runs every startup.
+
+    Decoupled from the zone/ticket guard above so the lot can be re-created
+    after a partial wipe (DELETE FROM parking_spots/parking_lots) without
+    needing to drop the whole schema and reprocess uploaded videos.  Uses
+    the lot name as the identity key — if a row with the same name exists
+    we touch the spot list to match ``_DEMO_SPOTS``.
+    """
+    existing_lot = (
+        await session.execute(
+            select(ParkingLot).where(ParkingLot.name == _DEMO_PARKING_LOT_NAME)
+        )
+    ).scalar_one_or_none()
+
+    if existing_lot is None:
+        lot = ParkingLot(
+            name=_DEMO_PARKING_LOT_NAME,
+            location=_DEMO_PARKING_LOT_LOCATION,
+            total_spots=len(_DEMO_SPOTS),
+        )
+        session.add(lot)
+        await session.flush()
+    else:
+        lot = existing_lot
+
+    existing_spots = {
+        s.spot_label: s
+        for s in (
+            await session.execute(
+                select(ParkingSpot).where(ParkingSpot.parking_lot_id == lot.id)
+            )
+        ).scalars().all()
+    }
+
+    for label, lat, lon, plate in _DEMO_SPOTS:
+        spot = existing_spots.get(label)
+        if spot is None:
+            session.add(
+                ParkingSpot(
+                    spot_label=label,
+                    parking_lot_id=lot.id,
+                    latitude=lat,
+                    longitude=lon,
+                    assigned_plate=plate,
+                )
+            )
+        else:
+            # Refresh in place — lets us tweak _DEMO_SPOTS coords/owners
+            # without a manual migration.
+            spot.latitude = lat
+            spot.longitude = lon
+            spot.assigned_plate = plate
+
+    await session.commit()
+
 
 async def seed_db(session: AsyncSession) -> None:
     """Seed the database with initial parking data if it is empty."""
+    # Residential lot is idempotent and runs every startup.  See the docstring
+    # of _seed_residential_lot for why it isn't gated on the zone check below.
+    await _seed_residential_lot(session)
+
     # Check if we already have parking zones/tickets
     result = await session.execute(select(ParkingZone).limit(1))
     if result.scalar_one_or_none() is not None:
-        logger.info("Database already seeded. Skipping seed.")
+        logger.info("Database already seeded (zones present). Skipping ticket seed.")
         return
 
     logger.info("Seeding database with initial parking test data...")
@@ -140,28 +216,6 @@ async def seed_db(session: AsyncSession) -> None:
     )
     
     session.add_all([s1, s2])
-
-    # Mobile-LPR demo data: a small parking lot with GPS-tagged spots and a
-    # mix of reserved/unreserved entries.  Idempotent on its own — safe to
-    # re-run because the outer guard already returned if the zone exists.
-    lot = ParkingLot(
-        name=_DEMO_PARKING_LOT_NAME,
-        location="Cluj-Napoca, RO",
-        total_spots=len(_DEMO_SPOTS),
-    )
-    session.add(lot)
-    await session.flush()
-
-    for label, lat, lon, plate in _DEMO_SPOTS:
-        session.add(
-            ParkingSpot(
-                spot_label=label,
-                parking_lot_id=lot.id,
-                latitude=lat,
-                longitude=lon,
-                assigned_plate=plate,
-            )
-        )
 
     await session.commit()
     logger.info(
