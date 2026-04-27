@@ -7,6 +7,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.database import get_db
 from app.models.parking import ParkingTicket
 from app.models.parking_spot import ParkingSpot
+from app.schemas.occupancy import SuspiciousOccupancyOut
 from app.schemas.parking import (
     ParkingSpotIn,
     ParkingSpotOut,
@@ -59,6 +60,36 @@ async def create_spot(payload: ParkingSpotIn, db: AsyncSession = Depends(get_db)
     await db.commit()
     await db.refresh(spot)
     return spot
+
+
+@router.get("/spots/suspicious", response_model=List[SuspiciousOccupancyOut])
+async def list_suspicious_occupancies(
+    flagged_only: bool = True,
+    db: AsyncSession = Depends(get_db),
+):
+    """Return spots with suspicious foreign-plate occupancy, ranked by score.
+
+    Pass ``flagged_only=false`` to include records below the flag threshold.
+    """
+    from app.services.occupancy import get_suspicious_records
+    return await get_suspicious_records(db, flagged_only=flagged_only)
+
+
+@router.delete("/spots/suspicious/{record_id}", status_code=204)
+async def dismiss_suspicious_occupancy(
+    record_id: int,
+    db: AsyncSession = Depends(get_db),
+):
+    """Clear the suspicion score and flag for a record (false-positive dismissal).
+
+    Raw events are preserved for audit. Use when a flagged record is not a
+    genuine violation.
+    """
+    from app.services.occupancy import reset_occupancy_record
+    found = await reset_occupancy_record(record_id, db)
+    if not found:
+        raise HTTPException(status_code=404, detail="Record not found")
+    await db.commit()
 
 
 @router.get("/spots/{spot_id}", response_model=ParkingSpotOut)

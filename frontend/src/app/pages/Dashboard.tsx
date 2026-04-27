@@ -6,6 +6,7 @@ import { ProcessingView } from "../components/ProcessingView";
 import { ResultsView } from "../components/ResultsView";
 import { SessionHistory } from "../components/SessionHistory";
 import { PlateSearch } from "../components/PlateSearch";
+import { SuspiciousOccupancyPanel } from "../components/SuspiciousOccupancyPanel";
 import { ThemeToggle } from "../components/ThemeToggle";
 import { Button } from "../components/ui/button";
 import {
@@ -406,8 +407,12 @@ export function Dashboard() {
             />
           </div>
 
-          <div className="h-72 min-h-0 md:h-auto md:w-80">
+          <div className="h-72 min-h-0 border-b border-border md:h-auto md:w-80 md:border-b-0 md:border-r">
             <PlateSearch />
+          </div>
+
+          <div className="h-72 min-h-0 md:h-auto md:w-80">
+            <SuspiciousOccupancyPanel />
           </div>
         </div>
       </div>

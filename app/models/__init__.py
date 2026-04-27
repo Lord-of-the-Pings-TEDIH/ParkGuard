@@ -15,6 +15,7 @@ from app.models.parking import (
     ParkingSubscription,
     TicketCheck,
 )
+from app.models.occupancy import SpotOccupancyEvent, SpotOccupancyRecord
 
 __all__ = [
     "Base",
@@ -33,4 +34,6 @@ __all__ = [
     "ParkingTicket",
     "ParkingSubscription",
     "TicketCheck",
+    "SpotOccupancyEvent",
+    "SpotOccupancyRecord",
 ]

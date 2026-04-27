@@ -41,6 +41,7 @@ from app.pipeline.plate_validator import (
     is_invalid_plate,
     normalize_plate,
 )
+from app.services.occupancy import record_occupancy_event, reset_spot_suspicion
 from app.services.parking_validation import validate_parking_at_location
 from app.services.ticket_lookup import lookup_ticket
 
@@ -830,6 +831,22 @@ async def _finalize_track_with_fallback(
             detection.matched_spot_id = track_spot_id
 
     await db.flush()
+
+    # Occupancy scoring: update suspicion for foreign plates at reserved spots.
+    if track_spot_id is not None:
+        session_uuid = uuid.UUID(session_id) if session_id else None
+        if track_status == "MATCH":
+            await reset_spot_suspicion(track_spot_id, db)
+        elif track_status == "WRONG_PLATE":
+            await record_occupancy_event(
+                spot_id=track_spot_id,
+                plate_text=compact_text,
+                detected_at=representative.created_at,
+                detection_id=representative.id,
+                session_id=session_uuid,
+                db=db,
+            )
+
     track.finalized = True
 
     if session_id is not None:

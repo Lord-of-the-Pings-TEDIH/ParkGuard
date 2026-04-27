@@ -5,6 +5,7 @@ import type {
   Plate,
   Session,
   SpotMatchStatus,
+  SuspiciousOccupancy,
 } from "../types";
 
 const API_BASE = "/api";
@@ -360,6 +361,20 @@ export function subscribeToSessionEvents(
   }
 
   return () => es.close();
+}
+
+export async function getSuspiciousOccupancies(
+  flaggedOnly = true,
+): Promise<SuspiciousOccupancy[]> {
+  return fetchApi<SuspiciousOccupancy[]>(
+    `${API_BASE}/parking/spots/suspicious?flagged_only=${flaggedOnly}`,
+  );
+}
+
+export async function dismissSuspiciousOccupancy(recordId: number): Promise<void> {
+  await fetchApi<void>(`${API_BASE}/parking/spots/suspicious/${recordId}`, {
+    method: "DELETE",
+  });
 }
 
 export async function searchPlates(
