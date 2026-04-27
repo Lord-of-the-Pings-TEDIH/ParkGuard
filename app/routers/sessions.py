@@ -1,20 +1,23 @@
 import asyncio
+import json
 import logging
 import uuid
 import re
 import shutil
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import List
+from typing import AsyncGenerator, List
 
 import aiofiles
 import numpy as np
-from fastapi import APIRouter, Depends, Form, HTTPException, Response, UploadFile
+from fastapi import APIRouter, Depends, Form, HTTPException, Query, Response, UploadFile
+from fastapi.responses import StreamingResponse
 from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
 from app.core.database import AsyncSessionLocal, get_db
+from app.core.events import publish, subscribe, unsubscribe
 from app.models.detection import Detection, Frame, Session
 from app.models.parking import TicketCheck
 from app.pipeline.ocr import PlateReader
@@ -58,6 +61,15 @@ def _get_plate_reader() -> PlateReader:
 def _recognize_plate(crop: np.ndarray) -> tuple[str | None, float]:
     text, confidence = _get_plate_reader().read_plate(crop)
     return (text or None, confidence)
+
+
+def _recognize_plates_batch(
+    crops: list[np.ndarray],
+    *,
+    plate_types: list[str | None] | None = None,
+) -> list[tuple[str, float]]:
+    """Batched OCR — one PaddleOCR call for every crop in a frame."""
+    return _get_plate_reader().read_plates_batch(crops, plate_types=plate_types)
 
 
 def _is_video_file(path: Path) -> bool:
@@ -133,10 +145,12 @@ async def _run_processing_job(session_id: uuid.UUID) -> None:
         async with AsyncSessionLocal() as db:
             session = await db.get(Session, session_id)
             mobile_lpr = _build_mobile_lpr_for_session(session) if session else None
+            ocr_batch = _recognize_plates_batch if settings.OCR_BATCH_PER_FRAME else None
             await process_session(
                 session_id,
                 db,
                 ocr=_recognize_plate,
+                ocr_batch=ocr_batch,
                 mobile_lpr=mobile_lpr,
             )
     except asyncio.CancelledError:
@@ -147,6 +161,7 @@ async def _run_processing_job(session_id: uuid.UUID) -> None:
                 session.error_message = "Cancelled by user"
                 session.ended_at = datetime.now(UTC)
                 await db.commit()
+        publish(str(session_id), "session_failed", {"error": "Cancelled by user"})
         raise
     except Exception:
         logger.exception("Background processing failed for session %s", session_id)
@@ -602,20 +617,86 @@ async def cancel_session(session_id: uuid.UUID, db: AsyncSession = Depends(get_d
 
 
 @router.get("/{session_id}/detections", response_model=List[DetectionOut])
-async def list_detections(session_id: uuid.UUID, db: AsyncSession = Depends(get_db)):
-    """Return all detections for a session, with a computed crop_image_url."""
-    # Verify session exists
+async def list_detections(
+    session_id: uuid.UUID,
+    since: str | None = Query(default=None, description="ISO 8601 timestamp; return only detections created after this point"),
+    db: AsyncSession = Depends(get_db),
+):
+    """Return detections for a session.
+
+    Pass ``since`` (ISO 8601) to get only rows created after that timestamp —
+    useful for incremental polling after an SSE ``detection_finalized`` event.
+    """
     session = await db.get(Session, session_id)
     if session is None:
         raise HTTPException(status_code=404, detail="Session not found")
 
-    # Join detections through frames belonging to this session
     stmt = (
         select(Detection)
         .join(Frame, Detection.frame_id == Frame.id)
         .where(Frame.session_id == session_id)
         .order_by(Detection.created_at.desc())
     )
+    if since:
+        try:
+            since_dt = datetime.fromisoformat(since.replace("Z", "+00:00"))
+            stmt = stmt.where(Detection.created_at > since_dt)
+        except ValueError:
+            raise HTTPException(status_code=400, detail="Invalid 'since' timestamp; expected ISO 8601")
+
     result = await db.execute(stmt)
     detections = result.scalars().all()
     return detections
+
+
+@router.get("/{session_id}/events")
+async def session_events(session_id: uuid.UUID, db: AsyncSession = Depends(get_db)):
+    """Stream live pipeline events via Server-Sent Events.
+
+    Event types emitted by the backend:
+      * ``frame_processed``    – progress tick; data: {frames_processed, total_frames}
+      * ``detection_finalized`` – a track was finalised; data: {plate}
+      * ``session_completed``  – processing finished; data: {frames_processed, total_frames}
+      * ``session_failed``     – processing failed; data: {error}
+
+    The connection is kept alive with comment keepalives every 25 s.
+    """
+    session = await db.get(Session, session_id)
+    if session is None:
+        raise HTTPException(status_code=404, detail="Session not found")
+
+    sid = str(session_id)
+
+    async def _stream() -> AsyncGenerator[str, None]:
+        # If already in a terminal state, send one event and close immediately.
+        if session.status == "completed":
+            yield (
+                f"event: session_completed\n"
+                f"data: {json.dumps({'frames_processed': session.frames_processed, 'total_frames': session.total_frames})}\n\n"
+            )
+            return
+        if session.status == "failed":
+            yield (
+                f"event: session_failed\n"
+                f"data: {json.dumps({'error': session.error_message})}\n\n"
+            )
+            return
+
+        q = await subscribe(sid)
+        try:
+            while True:
+                try:
+                    event = await asyncio.wait_for(q.get(), timeout=25.0)
+                    yield f"event: {event['type']}\ndata: {json.dumps(event['data'])}\n\n"
+                    if event["type"] in ("session_completed", "session_failed"):
+                        break
+                except asyncio.TimeoutError:
+                    yield ": keepalive\n\n"
+        finally:
+            unsubscribe(sid, q)
+
+    return StreamingResponse(
+        _stream(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )

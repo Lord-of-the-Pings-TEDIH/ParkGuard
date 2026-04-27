@@ -1,10 +1,10 @@
-import { motion } from "motion/react";
+import { AnimatePresence, motion } from "motion/react";
 import { ImageOff } from "lucide-react";
 import { RomanianPlate } from "./RomanianPlate";
 import { SpotMatchBadge } from "./SpotMatchBadge";
 import { TicketStatusBadge } from "./TicketStatusBadge";
 import type { Detection } from "../types";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 
 interface DetectionCardProps {
   detection: Detection;
@@ -13,11 +13,34 @@ interface DetectionCardProps {
 
 export function DetectionCard({ detection, index }: DetectionCardProps) {
   const [imageError, setImageError] = useState(false);
+  const [isExpanded, setIsExpanded] = useState(false);
   const isUnpaid = detection.ticket_status === "none";
   const isWrongSpot = detection.spot_match_status === "WRONG_PLATE";
   const highlightAlert = isUnpaid || isWrongSpot;
 
+  const cropSrc =
+    detection.crop_image_url.startsWith("http") ||
+    detection.crop_image_url.startsWith("/")
+      ? detection.crop_image_url
+      : `/api/crops/${detection.crop_image_url}`;
+
+  // Esc closes the lightbox.  motion's layoutId handles the bounce-back to the
+  // card on close, so we only need to flip the open flag.
+  useEffect(() => {
+    if (!isExpanded) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setIsExpanded(false);
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [isExpanded]);
+
+  // Stable layoutId so motion animates the same crop between its card slot
+  // and the fullscreen lightbox.  Falls back to id when annotation is missing.
+  const layoutId = `crop-${detection.id}`;
+
   return (
+    <>
     <motion.div
       initial={{ opacity: 0, y: 20 }}
       animate={{ opacity: 1, y: 0 }}
@@ -35,15 +58,25 @@ export function DetectionCard({ detection, index }: DetectionCardProps) {
               <ImageOff className="h-6 w-6 text-muted-foreground" />
             </div>
           ) : (
-            <img
-              src={
-                detection.crop_image_url.startsWith('http') || detection.crop_image_url.startsWith('/')
-                  ? detection.crop_image_url
-                  : `/api/crops/${detection.crop_image_url}`
-              }
+            <motion.img
+              layoutId={layoutId}
+              src={cropSrc}
               alt={detection.ocr_normalized_text}
-              className="h-20 w-full rounded border border-border object-cover shadow-sm md:w-32"
+              className="h-20 w-full cursor-zoom-in rounded border border-border object-cover shadow-sm transition-shadow hover:shadow-lg md:w-32"
               onError={() => setImageError(true)}
+              onClick={() => setIsExpanded(true)}
+              role="button"
+              tabIndex={0}
+              onKeyDown={(e) => {
+                if (e.key === "Enter" || e.key === " ") {
+                  e.preventDefault();
+                  setIsExpanded(true);
+                }
+              }}
+              // Hide the in-card slot while the lightbox owns the shared
+              // element — without this the small thumbnail would briefly
+              // double up beside the expanded one mid-transition.
+              style={isExpanded ? { visibility: "hidden" } : undefined}
             />
           )}
         </div>
@@ -94,5 +127,38 @@ export function DetectionCard({ detection, index }: DetectionCardProps) {
         />
       )}
     </motion.div>
+
+    {/* Lightbox: shared layoutId on the <img> animates the crop from its
+        slot in the card to a centred fullscreen view (and back when closed),
+        so the user gets the "image flies in / flies back" effect requested. */}
+    <AnimatePresence>
+      {isExpanded && (
+        <motion.div
+          key="lightbox"
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 p-4 backdrop-blur-sm"
+          initial={{ opacity: 0 }}
+          animate={{ opacity: 1 }}
+          exit={{ opacity: 0 }}
+          transition={{ duration: 0.2 }}
+          onClick={() => setIsExpanded(false)}
+          role="dialog"
+          aria-modal="true"
+          aria-label={`Plate ${detection.ocr_normalized_text} crop`}
+        >
+          <motion.img
+            layoutId={layoutId}
+            src={cropSrc}
+            alt={detection.ocr_normalized_text}
+            className="max-h-[90vh] max-w-[90vw] cursor-zoom-out rounded-lg border-2 border-white/40 object-contain shadow-2xl"
+            onClick={(e) => {
+              // Clicking the image itself shouldn't close — only the backdrop
+              // should — so the user can read the plate without dismissing.
+              e.stopPropagation();
+            }}
+          />
+        </motion.div>
+      )}
+    </AnimatePresence>
+    </>
   );
 }

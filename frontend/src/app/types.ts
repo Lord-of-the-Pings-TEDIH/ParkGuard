@@ -74,3 +74,17 @@ export interface SessionStats {
   unpaid_count: number;
   active_count: number;
 }
+
+export interface SuspiciousOccupancy {
+  id: number;
+  spot_id: number;
+  spot_label: string | null;
+  assigned_plate: string | null;
+  plate_text: string;
+  event_count: number;
+  distinct_days: number;
+  accumulated_score: number;
+  first_seen_at: string;
+  last_seen_at: string;
+  is_flagged: boolean;
+}

@@ -25,6 +25,18 @@ export function formatElapsedTime(startedAt: string): string {
   return `${Math.floor(seconds / 3600)}h ${Math.floor((seconds % 3600) / 60)}m`;
 }
 
+export function formatDuration(
+  startedAt: string,
+  endedAt: string | null,
+): string | null {
+  if (!endedAt) return null;
+  const seconds = differenceInSeconds(new Date(endedAt), new Date(startedAt));
+  if (!Number.isFinite(seconds) || seconds < 0) return null;
+  if (seconds < 60) return `${seconds}s`;
+  if (seconds < 3600) return `${Math.floor(seconds / 60)}m ${seconds % 60}s`;
+  return `${Math.floor(seconds / 3600)}h ${Math.floor((seconds % 3600) / 60)}m`;
+}
+
 export function formatRelativeTime(dateString: string): string {
   return formatDistanceToNow(new Date(dateString), { addSuffix: true });
 }

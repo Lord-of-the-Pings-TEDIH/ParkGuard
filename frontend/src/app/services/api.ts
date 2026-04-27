@@ -5,6 +5,7 @@ import type {
   Plate,
   Session,
   SpotMatchStatus,
+  SuspiciousOccupancy,
 } from "../types";
 
 const API_BASE = "/api";
@@ -314,11 +315,66 @@ export async function cancelSession(id: string): Promise<Session> {
   return mapSession(session);
 }
 
-export async function getDetections(sessionId: string): Promise<Detection[]> {
-  const detections = await fetchApi<BackendDetection[]>(
-    `${API_BASE}/sessions/${sessionId}/detections`
-  );
+export async function getDetections(sessionId: string, since?: string): Promise<Detection[]> {
+  const url = since
+    ? `${API_BASE}/sessions/${sessionId}/detections?since=${encodeURIComponent(since)}`
+    : `${API_BASE}/sessions/${sessionId}/detections`;
+  const detections = await fetchApi<BackendDetection[]>(url);
   return dedupeDetectionsByAnnotation(detections.map(mapDetection));
+}
+
+export interface SessionEventHandlers {
+  onFrameProcessed?: (data: { frames_processed: number; total_frames: number | null }) => void;
+  onDetectionFinalized?: (data: { plate: string }) => void;
+  onCompleted?: (data: { frames_processed: number; total_frames: number | null }) => void;
+  onFailed?: (data: { error: string | null }) => void;
+}
+
+/** Open an SSE connection for live session events. Returns a close() function. */
+export function subscribeToSessionEvents(
+  sessionId: string,
+  handlers: SessionEventHandlers,
+): () => void {
+  const es = new EventSource(`${API_BASE}/sessions/${sessionId}/events`);
+
+  if (handlers.onFrameProcessed) {
+    es.addEventListener("frame_processed", (e: MessageEvent) => {
+      handlers.onFrameProcessed!(JSON.parse(e.data));
+    });
+  }
+  if (handlers.onDetectionFinalized) {
+    es.addEventListener("detection_finalized", (e: MessageEvent) => {
+      handlers.onDetectionFinalized!(JSON.parse(e.data));
+    });
+  }
+  if (handlers.onCompleted) {
+    es.addEventListener("session_completed", (e: MessageEvent) => {
+      handlers.onCompleted!(JSON.parse(e.data));
+      es.close();
+    });
+  }
+  if (handlers.onFailed) {
+    es.addEventListener("session_failed", (e: MessageEvent) => {
+      handlers.onFailed!(JSON.parse(e.data));
+      es.close();
+    });
+  }
+
+  return () => es.close();
+}
+
+export async function getSuspiciousOccupancies(
+  flaggedOnly = true,
+): Promise<SuspiciousOccupancy[]> {
+  return fetchApi<SuspiciousOccupancy[]>(
+    `${API_BASE}/parking/spots/suspicious?flagged_only=${flaggedOnly}`,
+  );
+}
+
+export async function dismissSuspiciousOccupancy(recordId: number): Promise<void> {
+  await fetchApi<void>(`${API_BASE}/parking/spots/suspicious/${recordId}`, {
+    method: "DELETE",
+  });
 }
 
 export async function searchPlates(

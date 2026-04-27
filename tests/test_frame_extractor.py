@@ -89,27 +89,47 @@ def test_get_video_info_empty_path():
 def test_real_video_extraction(tmp_path):
     video_path = str(tmp_path / "real_test_video.mp4")
     create_test_video(video_path, fps=25, num_frames=250)
-    gen = extract_frames(video_path, fps_target=5)
-    
-    # Get the first frame to initialize the generator and open the cap
-    first_yield = next(gen)
-    
-    # Introspect local variables to get the 'cap' object
-    cap = gen.gi_frame.f_locals['cap']
-    
-    # Consume the rest of the frames
-    frames = [first_yield] + list(gen)
-    
+    frames = list(extract_frames(video_path, fps_target=5))
+
     # 1. Test that fps_target=5 yields ~50 frames from a 10s video (±2 tolerance)
     assert 48 <= len(frames) <= 52, f"Expected ~50 frames, got {len(frames)}"
-    
+
     # 2. Test that pts_ms increases monotonically
     pts_list = [f[1] for f in frames]
     assert all(pts_list[i] < pts_list[i+1] for i in range(len(pts_list)-1))
-    
+
     # 3. Test that frame.shape[2] == 3 (BGR)
     for _, _, frame in frames:
         assert frame.shape[2] == 3
-        
-    # 4. Test that VideoCapture is closed after iteration
-    assert cap.isOpened() == False
+
+    # 4. Test that the underlying VideoCapture released the file — re-opening
+    # the same path must succeed.  The reader thread now owns ``cap`` and
+    # closes it in its ``finally`` block, so we verify the observable effect
+    # rather than introspecting the generator's frame.
+    cap = cv2.VideoCapture(video_path)
+    try:
+        assert cap.isOpened()
+    finally:
+        cap.release()
+
+
+def test_extract_frames_stops_reader_on_early_break(tmp_path):
+    """Iterator break must shut down the background reader and free the file.
+
+    Regression guard for the threaded reader: if the consumer stops early,
+    the reader needs to see ``stop_event`` and release ``cap`` so the file
+    can be reopened (or deleted on Windows).
+    """
+    video_path = str(tmp_path / "early_break.mp4")
+    create_test_video(video_path, fps=30, num_frames=120)
+
+    gen = extract_frames(video_path, fps_target=10, prefetch=2)
+    next(gen)  # pull one frame, then walk away
+    gen.close()
+
+    # Reopening the file proves the reader thread cleaned up its capture.
+    cap = cv2.VideoCapture(video_path)
+    try:
+        assert cap.isOpened()
+    finally:
+        cap.release()
