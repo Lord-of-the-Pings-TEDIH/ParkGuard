@@ -49,11 +49,21 @@ export interface ParkingSpot {
   id: number;
   spot_label: string;
   parking_lot_id: number;
+  spot_sequence: number | null;
   latitude: number | null;
   longitude: number | null;
   assigned_plate: string | null;
   is_occupied: boolean;
   updated_at: string;
+}
+
+export interface Camera {
+  id: number;
+  name: string;
+  stream_url: string;
+  parking_lot_id: number;
+  is_active: boolean;
+  created_at: string;
 }
 
 export interface Plate {
@@ -84,6 +94,8 @@ export interface SuspiciousOccupancy {
   event_count: number;
   distinct_days: number;
   accumulated_score: number;
+  hour_concentration: number | null;
+  typical_hour: number | null;
   first_seen_at: string;
   last_seen_at: string;
   is_flagged: boolean;

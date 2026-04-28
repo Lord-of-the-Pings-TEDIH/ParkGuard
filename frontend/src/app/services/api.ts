@@ -1,4 +1,5 @@
 import type {
+  Camera,
   Detection,
   MobileLprPose,
   ParkingSpot,
@@ -390,4 +391,39 @@ export async function searchPlates(
     signal,
   });
   return plates.map(mapPlate);
+}
+
+export interface CameraIn {
+  name: string;
+  stream_url: string;
+  parking_lot_id: number;
+  is_active?: boolean;
+}
+
+export async function getCameras(): Promise<Camera[]> {
+  return fetchApi<Camera[]>(`${API_BASE}/cameras`);
+}
+
+export async function getCamera(id: number): Promise<Camera> {
+  return fetchApi<Camera>(`${API_BASE}/cameras/${id}`);
+}
+
+export async function createCamera(payload: CameraIn): Promise<Camera> {
+  return fetchApi<Camera>(`${API_BASE}/cameras`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+}
+
+export async function updateCamera(id: number, payload: CameraIn): Promise<Camera> {
+  return fetchApi<Camera>(`${API_BASE}/cameras/${id}`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+}
+
+export async function deleteCamera(id: number): Promise<void> {
+  await fetchApi<void>(`${API_BASE}/cameras/${id}`, { method: "DELETE" });
 }
