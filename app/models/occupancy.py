@@ -80,6 +80,12 @@ class SpotOccupancyRecord(Base):
     accumulated_score: Mapped[float] = mapped_column(
         Float, nullable=False, default=0.0, server_default="0"
     )
+    # Circular concentration of detection hours in [0, 1].
+    # 1 = all events at the same hour, 0 = uniformly spread.
+    # NULL until ≥2 events exist.
+    hour_concentration: Mapped[float | None] = mapped_column(Float, nullable=True)
+    # Circular mean of the hour-of-day for all events (0–24).
+    typical_hour: Mapped[float | None] = mapped_column(Float, nullable=True)
     first_seen_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False
     )

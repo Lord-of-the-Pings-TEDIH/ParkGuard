@@ -129,6 +129,9 @@ class SessionOut(BaseModel):
     # and split into ``gps_warnings`` below for the frontend.
     gps_validation_warnings: str | None = None
 
+    zone_id: int | None = None
+    identified_lot_id: int | None = None
+
     model_config = ConfigDict(from_attributes=True)
 
     @computed_field  # type: ignore[prop-decorator]

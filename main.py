@@ -22,6 +22,8 @@ import app.models
 from app.routers.sessions import router as sessions_router
 from app.routers.plates import router as plates_router
 from app.routers.parking import router as parking_router
+from app.routers.alerts import router as alerts_router
+from app.routers.cameras import router as cameras_router
 
 # Create required directories before mounting static files
 Path(settings.CROPS_DIR).mkdir(parents=True, exist_ok=True)
@@ -87,6 +89,8 @@ app.mount("/api/crops", StaticFiles(directory=settings.CROPS_DIR), name="crops")
 app.include_router(sessions_router, prefix="/api/sessions", tags=["sessions"])
 app.include_router(plates_router, prefix="/api/plates", tags=["plates"])
 app.include_router(parking_router, prefix="/api/parking", tags=["parking"])
+app.include_router(alerts_router, prefix="/api/alerts", tags=["alerts"])
+app.include_router(cameras_router, prefix="/api/cameras", tags=["cameras"])
 
 
 class HealthCheckOut(BaseModel):

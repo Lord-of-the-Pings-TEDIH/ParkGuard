@@ -146,12 +146,14 @@ async def _run_processing_job(session_id: uuid.UUID) -> None:
             session = await db.get(Session, session_id)
             mobile_lpr = _build_mobile_lpr_for_session(session) if session else None
             ocr_batch = _recognize_plates_batch if settings.OCR_BATCH_PER_FRAME else None
+            zone_id = (session.zone_id if session else None) or settings.DEFAULT_ZONE_ID
             await process_session(
                 session_id,
                 db,
                 ocr=_recognize_plate,
                 ocr_batch=ocr_batch,
                 mobile_lpr=mobile_lpr,
+                zone_id=zone_id,
             )
     except asyncio.CancelledError:
         async with AsyncSessionLocal() as db:
@@ -416,6 +418,7 @@ async def create_session(
     gps_latitude: float | None = Form(default=None),
     gps_longitude: float | None = Form(default=None),
     gps_heading_deg: float | None = Form(default=None),
+    zone_id: int | None = Form(default=None),
     db: AsyncSession = Depends(get_db),
 ):
     session_id = uuid.uuid4()
@@ -450,6 +453,7 @@ async def create_session(
         fps_target=effective_fps_target,
         frames_processed=0,
         total_frames=total_frames,
+        zone_id=zone_id,
     )
     _apply_pose_to_session(session_kwargs, pose)
     new_session = Session(**session_kwargs)
@@ -480,6 +484,7 @@ async def create_session_from_test_file(
     gps_latitude: float | None = Form(default=None),
     gps_longitude: float | None = Form(default=None),
     gps_heading_deg: float | None = Form(default=None),
+    zone_id: int | None = Form(default=None),
     db: AsyncSession = Depends(get_db),
 ):
     source = _resolve_test_upload_file(filename)
@@ -510,6 +515,7 @@ async def create_session_from_test_file(
         fps_target=effective_fps_target,
         frames_processed=0,
         total_frames=total_frames,
+        zone_id=zone_id,
     )
     _apply_pose_to_session(session_kwargs, pose)
     new_session = Session(**session_kwargs)

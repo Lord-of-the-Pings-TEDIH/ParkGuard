@@ -26,6 +26,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.config import settings
 from app.core.events import publish
 from app.models.detection import Detection, Frame, Plate, Session
+from app.models.parking_lot import ParkingLot  # noqa: F401 – used inside _apply_lot_heuristic
+from app.models.parking_spot import ParkingSpot
 from app.pipeline.deskew import deskew_plate
 from app.pipeline.detector import PlateDetector
 from app.pipeline.frame_extractor import extract_frames, get_video_info
@@ -835,6 +837,13 @@ async def _finalize_track_with_fallback(
     # Occupancy scoring: update suspicion for foreign plates at reserved spots.
     if track_spot_id is not None:
         session_uuid = uuid.UUID(session_id) if session_id else None
+
+        # Mark the physical spot as occupied whenever a plate is seen there,
+        # regardless of whether it's the rightful owner.
+        spot_obj = await db.get(ParkingSpot, track_spot_id)
+        if spot_obj is not None:
+            spot_obj.is_occupied = True
+
         if track_status == "MATCH":
             await reset_spot_suspicion(track_spot_id, db)
         elif track_status == "WRONG_PLATE":
@@ -861,6 +870,93 @@ async def _finalize_track_with_fallback(
     current = finalized_registry.get(normalized)
     if current is None or (evidence_votes, evidence_avg_conf) > current:
         finalized_registry[normalized] = (evidence_votes, evidence_avg_conf)
+
+
+_NON_ALNUM_RE_LOT = __import__("re").compile(r"[^A-Z0-9]")
+
+
+async def _apply_lot_heuristic(
+    session_id: uuid.UUID,
+    finalized_plates: dict[str, tuple[int, float]],
+    db: AsyncSession,
+) -> None:
+    """Identify which parking lot the non-GPS session was patrolling.
+
+    Votes for the lot whose registered spots have the most assigned-plate
+    matches against the set of plates seen in the video.  If a lot clears
+    the LOT_HEURISTIC_MIN_PLATES threshold:
+
+    1. session.identified_lot_id is updated.
+    2. Every finalized detection whose plate is NOT assigned to that lot
+       gets spot_match_status = "WRONG_PLATE" — the operator can then see
+       which foreign plates appeared in the lot even without GPS coordinates.
+    """
+    from collections import Counter
+    from app.models.parking_lot import ParkingLot
+
+    min_plates = int(settings.LOT_HEURISTIC_MIN_PLATES)
+
+    # Canonical (no-space, uppercase) forms of all finalized plates.
+    canonical_finalized = {
+        _NON_ALNUM_RE_LOT.sub("", p.upper()): p
+        for p in finalized_plates
+    }
+
+    # Load all reserved spots (those with an assigned_plate).
+    spots_result = await db.execute(
+        select(ParkingSpot).where(ParkingSpot.assigned_plate.is_not(None))
+    )
+    all_spots: list[ParkingSpot] = list(spots_result.scalars().all())
+
+    lot_votes: Counter[int] = Counter()
+    # Map lot_id → set of canonical assigned plates in that lot.
+    lot_canonical_plates: dict[int, set[str]] = {}
+    for spot in all_spots:
+        canonical_assigned = _NON_ALNUM_RE_LOT.sub(
+            "", (spot.assigned_plate or "").upper()
+        )
+        lot_canonical_plates.setdefault(spot.parking_lot_id, set()).add(canonical_assigned)
+        if canonical_assigned in canonical_finalized:
+            lot_votes[spot.parking_lot_id] += 1
+
+    if not lot_votes:
+        return
+
+    best_lot_id, best_count = lot_votes.most_common(1)[0]
+    if best_count < min_plates:
+        return
+
+    # Persist identified lot on the session.
+    session = await db.get(Session, session_id)
+    if session is not None:
+        session.identified_lot_id = best_lot_id
+
+    # Plates assigned to the identified lot.
+    lot_assigned_canonical = lot_canonical_plates.get(best_lot_id, set())
+
+    # Mark non-lot plates as WRONG_PLATE on all their detections.
+    for canonical_plate, normalized_plate in canonical_finalized.items():
+        if canonical_plate in lot_assigned_canonical:
+            continue  # legitimate — belongs to this lot
+        # Update all detections for this plate that don't yet have a spot verdict.
+        det_result = await db.execute(
+            select(Detection)
+            .join(Frame, Detection.frame_id == Frame.id)
+            .where(Frame.session_id == session_id)
+            .where(Detection.ocr_normalized_text == normalized_plate)
+            .where(Detection.spot_match_status.is_(None))
+        )
+        for det in det_result.scalars().all():
+            det.spot_match_status = "WRONG_PLATE"
+
+    await db.flush()
+    logger.info(
+        "Session %s: lot heuristic identified lot %d (%d matching plates out of %d seen)",
+        session_id,
+        best_lot_id,
+        best_count,
+        len(canonical_finalized),
+    )
 
 
 async def process_session(
@@ -1215,6 +1311,17 @@ async def process_session(
                 finalized_registry=finalized_plate_registry,
                 mobile_lpr=mobile_lpr,
                 session_id=str(session_id),
+            )
+
+        # Lot heuristic: for sessions without GPS, identify which lot the
+        # patrol was in by checking how many detected plates are assigned
+        # to the same lot.  If ≥ LOT_HEURISTIC_MIN_PLATES match, mark
+        # detections whose plate is NOT in that lot as WRONG_PLATE.
+        if mobile_lpr is None and finalized_plate_registry:
+            await _apply_lot_heuristic(
+                session_id=session_id,
+                finalized_plates=finalized_plate_registry,
+                db=db,
             )
 
         session.frames_processed = frames_processed

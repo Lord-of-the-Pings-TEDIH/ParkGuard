@@ -3,39 +3,33 @@
 Each time the pipeline finalises a WRONG_PLATE track at a reserved spot,
 one event is logged per patrol session (duplicates within the same session
 are silently skipped).  A suspicion score is then recomputed for that
-(spot, plate) pair from all events in the last 30 days.
+(spot, plate) pair from all events in the last OCCUPANCY_LOOKBACK_DAYS days.
 
 Score formula
 -------------
     score = base_score + spread_bonus + duration_bonus
 
     base_score  = Σ time_weight × decay(days_ago)
-                  summed over all events in the last 30 days
+                  summed over all events in the lookback window
 
     time_weight = 1.5 if detected 20:00–08:00 or on a weekend, else 1.0
 
     decay(d)    = 2^(−d / DECAY_HALF_LIFE_DAYS)
-                  half-life 15 days: an event from today counts fully,
-                  one from 15 days ago counts as 0.5, 30 days ago as 0.25
 
     spread_bonus = min((distinct_sessions − 1) × 0.5, 2.5)
                    linear bonus for each additional patrol session that
                    caught the plate, capped at 2.5 (five sessions).
-                   Uses sessions, not days, so back-to-back passes on the
-                   same day each count.
 
     duration_bonus = per calendar day: min(gap_hours / 8, 1.5) when two
                      distinct patrol sessions visited the spot ≥ 3 h apart
-                     on that day — evidence of long-term occupation.
+                     on that day.
 
-Why these changes over the original formula
--------------------------------------------
-* The original ``raw_sum × recurrence_weight`` was quadratic: more events
-  raised both terms simultaneously, hitting 55+ for ten daily sightings.
-  The new formula grows linearly in both dimensions.
-* Time decay prevents old events from dominating the score indefinitely.
-* Session deduplication ensures one patrol pass = one event, even if OCR
-  splits the plate into two tracks inside the same video.
+Hour concentration
+------------------
+    hour_concentration ∈ [0, 1] measures how consistently events cluster at
+    the same time of day.  1 = all events at exactly the same hour,
+    0 = events spread uniformly over 24 hours.  Darius specifically
+    mentions "la ore similare (de exemplu 3 noaptea)" as a red flag.
 
 Score reset
 -----------
@@ -54,13 +48,16 @@ from datetime import datetime, timedelta, timezone
 from sqlalchemy import delete, func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.config import settings
 from app.models.occupancy import SpotOccupancyEvent, SpotOccupancyRecord
 from app.models.parking_spot import ParkingSpot
 
 UTC = timezone.utc
-FLAG_THRESHOLD: float = 8.0
-_LOOKBACK_DAYS: int = 30
-_DECAY_HALF_LIFE_DAYS: float = 15.0
+
+# Read thresholds from settings so operators can tune without code changes.
+FLAG_THRESHOLD: float = settings.OCCUPANCY_FLAG_THRESHOLD
+_LOOKBACK_DAYS: int = settings.OCCUPANCY_LOOKBACK_DAYS
+_DECAY_HALF_LIFE_DAYS: float = settings.OCCUPANCY_DECAY_HALF_LIFE_DAYS
 _DECAY_K: float = math.log(2) / _DECAY_HALF_LIFE_DAYS
 
 
@@ -78,12 +75,49 @@ def _decay(days_ago: float) -> float:
     return math.exp(-_DECAY_K * max(0.0, days_ago))
 
 
+def _compute_hour_concentration(events: list[SpotOccupancyEvent]) -> float | None:
+    """Measure how consistently events cluster at the same hour of day.
+
+    Returns a value in [0, 1]:
+      1.0 = all events at the same hour (maximally concentrated)
+      0.0 = events uniformly spread across all 24 hours
+
+    Uses circular statistics for hours (wraps around midnight so
+    22:00 and 02:00 are recognised as close together).
+
+    Returns None when fewer than 2 events are present.
+    """
+    if len(events) < 2:
+        return None
+
+    # Map each hour to an angle on the unit circle (0h = 0°, 23h = 345°).
+    angles = [e.detected_at.hour * (2 * math.pi / 24) for e in events]
+    n = len(angles)
+    mean_sin = sum(math.sin(a) for a in angles) / n
+    mean_cos = sum(math.cos(a) for a in angles) / n
+    # Resultant length R: 1 = perfectly concentrated, 0 = maximally dispersed.
+    return math.sqrt(mean_sin ** 2 + mean_cos ** 2)
+
+
+def _compute_typical_hour(events: list[SpotOccupancyEvent]) -> float | None:
+    """Return the circular mean hour of day (0–24) across events, or None."""
+    if not events:
+        return None
+    angles = [e.detected_at.hour * (2 * math.pi / 24) for e in events]
+    n = len(angles)
+    mean_sin = sum(math.sin(a) for a in angles) / n
+    mean_cos = sum(math.cos(a) for a in angles) / n
+    angle = math.atan2(mean_sin, mean_cos)
+    hour = (angle * 24 / (2 * math.pi)) % 24
+    return hour
+
+
 async def _recompute_score(
     spot_id: int,
     plate_text: str,
     db: AsyncSession,
-) -> tuple[float, int]:
-    """Return (score, distinct_days) computed from events in the last 30 days."""
+) -> tuple[float, int, float | None, float | None]:
+    """Return (score, distinct_days, hour_concentration, typical_hour)."""
     cutoff = datetime.now(UTC) - timedelta(days=_LOOKBACK_DAYS)
     result = await db.execute(
         select(SpotOccupancyEvent)
@@ -95,11 +129,10 @@ async def _recompute_score(
     events = result.scalars().all()
 
     if not events:
-        return 0.0, 0
+        return 0.0, 0, None, None
 
     now = datetime.now(UTC)
 
-    # Base score: per-event time_weight attenuated by age.
     base_score = sum(
         e.time_weight * _decay((now - e.detected_at).total_seconds() / 86400)
         for e in events
@@ -107,15 +140,11 @@ async def _recompute_score(
 
     distinct_days = len({e.detected_at.date() for e in events})
 
-    # Spread bonus: each additional distinct patrol session adds 0.5, capped at 2.5.
-    # Null session_ids are grouped together as one anonymous session.
     distinct_sessions = len({e.session_id for e in events})
     spread_bonus = min(max(0, distinct_sessions - 1) * 0.5, 2.5)
 
     score = base_score + spread_bonus
 
-    # Duration bonus: for each calendar day where ≥2 patrol sessions visited
-    # the same spot, add a bonus proportional to the gap (evidences all-day use).
     by_day: dict[object, dict[uuid.UUID | None, datetime]] = defaultdict(dict)
     for e in events:
         day = e.detected_at.date()
@@ -130,7 +159,10 @@ async def _recompute_score(
             if gap_hours >= 3:
                 score += min(gap_hours / 8.0, 1.5)
 
-    return score, distinct_days
+    hour_conc = _compute_hour_concentration(list(events))
+    typical_hour = _compute_typical_hour(list(events))
+
+    return score, distinct_days, hour_conc, typical_hour
 
 
 async def record_occupancy_event(
@@ -146,9 +178,9 @@ async def record_occupancy_event(
 
     If an event for this (spot, plate, session) already exists the call is a
     no-op — one patrol pass counts once regardless of how many tracks OCR
-    extracted from the video.
+    extracted from the video.  When the record transitions from unflagged to
+    flagged an Alert is created automatically.
     """
-    # Session deduplication: one event per (spot, plate, session).
     if session_id is not None:
         dup = await db.execute(
             select(SpotOccupancyEvent.id)
@@ -172,7 +204,9 @@ async def record_occupancy_event(
     )
     await db.flush()
 
-    score, distinct_days = await _recompute_score(spot_id, plate_text, db)
+    score, distinct_days, hour_conc, typical_hour = await _recompute_score(
+        spot_id, plate_text, db
+    )
 
     result = await db.execute(
         select(SpotOccupancyRecord)
@@ -182,6 +216,9 @@ async def record_occupancy_event(
     )
     record = result.scalars().first()
 
+    previously_flagged = record.is_flagged if record is not None else False
+    now_flagged = score >= flag_threshold
+
     if record is None:
         db.add(
             SpotOccupancyRecord(
@@ -190,19 +227,47 @@ async def record_occupancy_event(
                 event_count=1,
                 distinct_days=distinct_days,
                 accumulated_score=score,
+                hour_concentration=hour_conc,
+                typical_hour=typical_hour,
                 first_seen_at=detected_at,
                 last_seen_at=detected_at,
-                is_flagged=score >= flag_threshold,
+                is_flagged=now_flagged,
             )
         )
     else:
         record.event_count += 1
         record.distinct_days = distinct_days
         record.accumulated_score = score
+        record.hour_concentration = hour_conc
+        record.typical_hour = typical_hour
         record.last_seen_at = detected_at
-        record.is_flagged = score >= flag_threshold
+        record.is_flagged = now_flagged
 
     await db.flush()
+
+    # Create an alert the first time a record crosses the flag threshold.
+    if now_flagged and not previously_flagged:
+        from app.models.alert import Alert
+        spot_result = await db.execute(
+            select(ParkingSpot).where(ParkingSpot.id == spot_id).limit(1)
+        )
+        spot = spot_result.scalars().first()
+        spot_label = spot.spot_label if spot else str(spot_id)
+        hour_info = (
+            f" (ora tipică: {typical_hour:.0f}h)" if typical_hour is not None else ""
+        )
+        db.add(
+            Alert(
+                detection_id=detection_id,
+                alert_type="spot_misuse",
+                message=(
+                    f"Plăcuța {plate_text} detectată de {record.event_count if record else 1}× "  # type: ignore[union-attr]
+                    f"pe locul {spot_label}{hour_info}"
+                ),
+                is_resolved=False,
+            )
+        )
+        await db.flush()
 
 
 async def reset_spot_suspicion(spot_id: int, db: AsyncSession) -> None:
@@ -229,6 +294,8 @@ class EnrichedOccupancyRecord:
     event_count: int
     distinct_days: int
     accumulated_score: float
+    hour_concentration: float | None
+    typical_hour: float | None
     first_seen_at: datetime
     last_seen_at: datetime
     is_flagged: bool
@@ -266,6 +333,8 @@ async def get_suspicious_records(
             event_count=r.event_count,
             distinct_days=r.distinct_days,
             accumulated_score=r.accumulated_score,
+            hour_concentration=getattr(r, "hour_concentration", None),
+            typical_hour=getattr(r, "typical_hour", None),
             first_seen_at=r.first_seen_at,
             last_seen_at=r.last_seen_at,
             is_flagged=r.is_flagged,
@@ -291,15 +360,8 @@ async def reset_occupancy_record(record_id: int, db: AsyncSession) -> bool:
 async def cleanup_session_occupancy(session_id: uuid.UUID, db: AsyncSession) -> None:
     """Remove occupancy events tied to a session and recompute affected records.
 
-    Must be called BEFORE the Session row is deleted — the FK on
-    SpotOccupancyEvent.session_id is SET NULL on cascade, so once the session
-    is gone we can no longer identify which events belonged to it.
-
-    For each (spot, plate) pair that loses events:
-    - If no events remain at all → delete the record entirely.
-    - Otherwise → recompute score/flag from the surviving events.
+    Must be called BEFORE the Session row is deleted.
     """
-    # Collect affected (spot_id, plate_text) pairs before deleting anything.
     pairs_result = await db.execute(
         select(SpotOccupancyEvent.spot_id, SpotOccupancyEvent.plate_text)
         .where(SpotOccupancyEvent.session_id == session_id)
@@ -316,8 +378,6 @@ async def cleanup_session_occupancy(session_id: uuid.UUID, db: AsyncSession) -> 
     await db.flush()
 
     for spot_id, plate_text in affected_pairs:
-        # Count all remaining events (not just the 30-day window) to decide
-        # whether to keep or delete the record.
         count_result = await db.execute(
             select(func.count(SpotOccupancyEvent.id))
             .where(SpotOccupancyEvent.spot_id == spot_id)
@@ -338,10 +398,14 @@ async def cleanup_session_occupancy(session_id: uuid.UUID, db: AsyncSession) -> 
         if remaining == 0:
             await db.delete(record)
         else:
-            score, distinct_days = await _recompute_score(spot_id, plate_text, db)
+            score, distinct_days, hour_conc, typical_hour = await _recompute_score(
+                spot_id, plate_text, db
+            )
             record.event_count = remaining
             record.distinct_days = distinct_days
             record.accumulated_score = score
+            record.hour_concentration = hour_conc
+            record.typical_hour = typical_hour
             record.is_flagged = score >= FLAG_THRESHOLD
 
     await db.flush()

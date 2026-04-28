@@ -1,6 +1,6 @@
 from datetime import datetime
 
-from sqlalchemy import String, Boolean, ForeignKey, DateTime, Float, Index, func
+from sqlalchemy import String, Boolean, ForeignKey, DateTime, Float, Index, Integer, func
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.models.base import Base
@@ -14,6 +14,9 @@ class ParkingSpot(Base):
     parking_lot_id: Mapped[int] = mapped_column(
         ForeignKey("parking_lots.id"), nullable=False
     )
+    # Sequential position within the lot.  Used for the X / X+1 / X+2
+    # neighbouring-spot analysis from Darius's spec.  NULL means unordered.
+    spot_sequence: Mapped[int | None] = mapped_column(Integer, nullable=True)
     is_occupied: Mapped[bool] = mapped_column(Boolean, default=False)
 
     # Mobile-LPR geolocation: GPS centre of the spot + the plate that may park here.
