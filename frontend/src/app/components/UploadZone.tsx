@@ -85,7 +85,7 @@ export function UploadZone({ onUpload, isProcessing }: UploadZoneProps) {
     if (!selectedFile) return;
     const pose = parsePose();
     if (pose === "invalid") {
-      setPoseError("Enter valid latitude (-90..90), longitude (-180..180), and heading (degrees).");
+      setPoseError("Introduceți latitudine validă (-90..90), longitudine (-180..180) și direcție (grade).");
       return;
     }
     setPoseError(null);

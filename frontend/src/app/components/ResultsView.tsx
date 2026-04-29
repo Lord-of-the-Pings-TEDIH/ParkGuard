@@ -34,7 +34,7 @@ export function ResultsView({ session, detections, onReset }: ResultsViewProps) 
                   {session.source_filename}
                 </h2>
                 <p className="flex items-center gap-1.5 text-xs text-muted-foreground md:text-sm">
-                  <span>Complete</span>
+                  <span>Finalizat</span>
                   {duration && (
                     <>
                       <span aria-hidden>·</span>

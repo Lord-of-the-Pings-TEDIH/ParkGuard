@@ -16,10 +16,10 @@ import type { Alert, SuspiciousOccupancy } from "../types";
 const POLL_INTERVAL_MS = 60_000;
 
 function severity(score: number): { label: string; className: string } {
-  if (score >= 12) return { label: "Critical", className: "bg-red-100 text-red-800 dark:bg-red-900 dark:text-red-200" };
-  if (score >= 8)  return { label: "High",     className: "bg-orange-100 text-orange-800 dark:bg-orange-900 dark:text-orange-200" };
-  if (score >= 4)  return { label: "Medium",   className: "bg-yellow-100 text-yellow-800 dark:bg-yellow-900 dark:text-yellow-200" };
-  return            { label: "Low",      className: "bg-muted text-muted-foreground" };
+  if (score >= 12) return { label: "Critic",  className: "bg-red-100 text-red-800 dark:bg-red-900 dark:text-red-200" };
+  if (score >= 8)  return { label: "Ridicat", className: "bg-orange-100 text-orange-800 dark:bg-orange-900 dark:text-orange-200" };
+  if (score >= 4)  return { label: "Mediu",   className: "bg-yellow-100 text-yellow-800 dark:bg-yellow-900 dark:text-yellow-200" };
+  return            { label: "Scăzut",  className: "bg-muted text-muted-foreground" };
 }
 
 function formatHour(h: number): string {
@@ -69,7 +69,7 @@ export function SuspiciousOccupancyPanel() {
       await dismissSuspiciousOccupancy(rec.id);
       setRecords((prev) => prev.filter((r) => r.id !== rec.id));
     } catch {
-      setError("Failed to dismiss record");
+      setError("Eroare la respingerea înregistrării");
     } finally {
       setDismissing(null);
     }
@@ -81,7 +81,7 @@ export function SuspiciousOccupancyPanel() {
       await resolveAlert(alert.id);
       setAlerts((prev) => prev.filter((a) => a.id !== alert.id));
     } catch {
-      setError("Failed to resolve alert");
+      setError("Eroare la rezolvarea alertei");
     } finally {
       setResolving(null);
     }
@@ -93,7 +93,7 @@ export function SuspiciousOccupancyPanel() {
       await deleteAlert(alert.id);
       setAlerts((prev) => prev.filter((a) => a.id !== alert.id));
     } catch {
-      setError("Failed to delete alert");
+      setError("Eroare la ștergerea alertei");
     } finally {
       setResolving(null);
     }
@@ -107,7 +107,7 @@ export function SuspiciousOccupancyPanel() {
         <div className="flex items-center justify-between gap-2">
           <div className="flex items-center gap-1.5">
             <AlertTriangle className="h-4 w-4 text-orange-600 dark:text-orange-400" />
-            <h3 className="font-medium text-foreground">Spot Misuse</h3>
+            <h3 className="font-medium text-foreground">Abuz Loc de Parcare</h3>
             {unresolvedCount > 0 && (
               <span className="rounded-full bg-red-500 px-1.5 py-0.5 text-xs font-bold text-white">
                 {unresolvedCount}
@@ -119,7 +119,7 @@ export function SuspiciousOccupancyPanel() {
             onClick={() => void fetchAll()}
             disabled={loading}
             className="rounded p-1 text-muted-foreground hover:text-foreground disabled:opacity-40"
-            title="Refresh"
+            title="Actualizează"
           >
             <RefreshCw className={`h-3.5 w-3.5 ${loading ? "animate-spin" : ""}`} />
           </button>
@@ -129,10 +129,10 @@ export function SuspiciousOccupancyPanel() {
       <Tabs defaultValue="records" className="flex min-h-0 flex-1 flex-col">
         <TabsList className="mx-3 mt-2 grid w-auto grid-cols-2">
           <TabsTrigger value="records" className="text-xs">
-            Records {records.length > 0 && `(${records.length})`}
+            Înregistrări {records.length > 0 && `(${records.length})`}
           </TabsTrigger>
           <TabsTrigger value="alerts" className="text-xs">
-            Alerts {unresolvedCount > 0 && `(${unresolvedCount})`}
+            Alerte {unresolvedCount > 0 && `(${unresolvedCount})`}
           </TabsTrigger>
         </TabsList>
 
@@ -146,7 +146,7 @@ export function SuspiciousOccupancyPanel() {
                 onCheckedChange={setFlaggedOnly}
               />
               <Label htmlFor="flagged-only" className="text-xs text-muted-foreground">
-                Flagged only
+                Doar semnalizate
               </Label>
             </div>
           </div>
@@ -160,7 +160,7 @@ export function SuspiciousOccupancyPanel() {
 
             {!loading && records.length === 0 && (
               <div className="py-12 text-center text-sm text-muted-foreground">
-                {flaggedOnly ? "No flagged records" : "No records yet"}
+                {flaggedOnly ? "Nicio înregistrare semnalizată" : "Nicio înregistrare încă"}
               </div>
             )}
 
@@ -185,7 +185,7 @@ export function SuspiciousOccupancyPanel() {
                       </span>
                       <button
                         type="button"
-                        title="Dismiss (false positive)"
+                        title="Respinge (fals pozitiv)"
                         disabled={dismissing === rec.id}
                         onClick={() => void handleDismiss(rec)}
                         className="rounded p-0.5 text-muted-foreground hover:text-foreground disabled:opacity-40"
@@ -197,28 +197,28 @@ export function SuspiciousOccupancyPanel() {
 
                   <div className="space-y-1 text-xs text-muted-foreground">
                     <div className="flex justify-between">
-                      <span>Spot</span>
+                      <span>Loc</span>
                       <span className="font-medium text-foreground">
                         {rec.spot_label ?? `#${rec.spot_id}`}
                       </span>
                     </div>
                     {rec.assigned_plate && (
                       <div className="flex justify-between">
-                        <span>Owner</span>
+                        <span>Proprietar</span>
                         <span className="font-mono font-medium text-foreground">
                           {rec.assigned_plate}
                         </span>
                       </div>
                     )}
                     <div className="flex justify-between">
-                      <span>Detections</span>
+                      <span>Detectări</span>
                       <span className="font-medium text-foreground">
-                        {rec.event_count}× over {rec.distinct_days}d
+                        {rec.event_count}× în {rec.distinct_days}z
                       </span>
                     </div>
                     {rec.typical_hour !== null && rec.typical_hour !== undefined && (
                       <div className="flex justify-between">
-                        <span>Typical time</span>
+                        <span>Ora tipică</span>
                         <span className="font-medium text-foreground">
                           {formatHour(rec.typical_hour)}
                           {rec.hour_concentration !== null && rec.hour_concentration !== undefined && (
@@ -230,11 +230,11 @@ export function SuspiciousOccupancyPanel() {
                       </div>
                     )}
                     <div className="flex justify-between">
-                      <span>First seen</span>
+                      <span>Prima detecție</span>
                       <span>{formatRelativeTime(rec.first_seen_at)}</span>
                     </div>
                     <div className="flex justify-between">
-                      <span>Last seen</span>
+                      <span>Ultima detecție</span>
                       <span>{formatRelativeTime(rec.last_seen_at)}</span>
                     </div>
                   </div>
@@ -255,7 +255,7 @@ export function SuspiciousOccupancyPanel() {
 
             {!loading && alerts.length === 0 && (
               <div className="py-12 text-center text-sm text-muted-foreground">
-                No open alerts
+                Nicio alertă deschisă
               </div>
             )}
 
@@ -268,22 +268,22 @@ export function SuspiciousOccupancyPanel() {
                   <div className="flex items-center gap-1.5">
                     <Bell className="mt-0.5 h-3.5 w-3.5 shrink-0 text-red-600 dark:text-red-400" />
                     <span className="text-xs font-semibold uppercase tracking-wide text-red-700 dark:text-red-300">
-                      {alert.alert_type.replace(/_/g, " ")}
+                      {alert.alert_type === "spot_misuse" ? "Abuz Loc" : alert.alert_type.replace(/_/g, " ")}
                     </span>
                   </div>
                   <div className="flex gap-1">
                     <button
                       type="button"
-                      title="Mark resolved"
+                      title="Marchează ca rezolvat"
                       disabled={resolving === alert.id}
                       onClick={() => void handleResolveAlert(alert)}
                       className="rounded px-1.5 py-0.5 text-xs font-medium text-green-700 hover:bg-green-100 disabled:opacity-40 dark:text-green-400 dark:hover:bg-green-900"
                     >
-                      Resolve
+                      Rezolvă
                     </button>
                     <button
                       type="button"
-                      title="Delete alert"
+                      title="Șterge alerta"
                       disabled={resolving === alert.id}
                       onClick={() => void handleDeleteAlert(alert)}
                       className="rounded p-0.5 text-muted-foreground hover:text-foreground disabled:opacity-40"

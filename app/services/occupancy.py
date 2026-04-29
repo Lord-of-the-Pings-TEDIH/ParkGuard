@@ -44,6 +44,7 @@ import uuid
 from collections import defaultdict
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
+from zoneinfo import ZoneInfo
 
 from sqlalchemy import delete, func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -53,6 +54,14 @@ from app.models.occupancy import SpotOccupancyEvent, SpotOccupancyRecord
 from app.models.parking_spot import ParkingSpot
 
 UTC = timezone.utc
+_RO_TZ = ZoneInfo("Europe/Bucharest")
+
+
+def _ro_hour(dt: datetime) -> int:
+    """Return the hour-of-day in Romanian local time (handles DST automatically)."""
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=UTC)
+    return dt.astimezone(_RO_TZ).hour
 
 # Read thresholds from settings so operators can tune without code changes.
 FLAG_THRESHOLD: float = settings.OCCUPANCY_FLAG_THRESHOLD
@@ -75,9 +84,12 @@ def _should_flag(score: float, event_count: int, threshold: float = FLAG_THRESHO
 
 
 def _time_weight(detected_at: datetime) -> float:
-    """1.5 for night (20:00–08:00) or weekend, 1.0 otherwise."""
-    hour = detected_at.hour
-    weekday = detected_at.weekday()  # 0=Mon … 6=Sun
+    """1.5 for night (20:00–08:00) or weekend in Romanian local time, 1.0 otherwise."""
+    if detected_at.tzinfo is None:
+        detected_at = detected_at.replace(tzinfo=UTC)
+    local_dt = detected_at.astimezone(_RO_TZ)
+    hour = local_dt.hour
+    weekday = local_dt.weekday()  # 0=Mon … 6=Sun
     if weekday >= 5 or hour >= 20 or hour < 8:
         return 1.5
     return 1.0
@@ -104,7 +116,7 @@ def _compute_hour_concentration(events: list[SpotOccupancyEvent]) -> float | Non
         return None
 
     # Map each hour to an angle on the unit circle (0h = 0°, 23h = 345°).
-    angles = [e.detected_at.hour * (2 * math.pi / 24) for e in events]
+    angles = [_ro_hour(e.detected_at) * (2 * math.pi / 24) for e in events]
     n = len(angles)
     mean_sin = sum(math.sin(a) for a in angles) / n
     mean_cos = sum(math.cos(a) for a in angles) / n
@@ -113,10 +125,10 @@ def _compute_hour_concentration(events: list[SpotOccupancyEvent]) -> float | Non
 
 
 def _compute_typical_hour(events: list[SpotOccupancyEvent]) -> float | None:
-    """Return the circular mean hour of day (0–24) across events, or None."""
+    """Return the circular mean hour of day in Romanian local time (0–24), or None."""
     if not events:
         return None
-    angles = [e.detected_at.hour * (2 * math.pi / 24) for e in events]
+    angles = [_ro_hour(e.detected_at) * (2 * math.pi / 24) for e in events]
     n = len(angles)
     mean_sin = sum(math.sin(a) for a in angles) / n
     mean_cos = sum(math.cos(a) for a in angles) / n

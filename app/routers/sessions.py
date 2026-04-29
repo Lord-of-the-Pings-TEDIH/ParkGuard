@@ -19,6 +19,7 @@ from app.core.config import settings
 from app.core.database import AsyncSessionLocal, get_db
 from app.models.parking import ParkingZone
 from app.core.events import publish, subscribe, unsubscribe
+from app.models.alert import Alert
 from app.models.detection import Detection, Frame, Session
 from app.models.parking import TicketCheck
 from app.pipeline.ocr import PlateReader
@@ -599,6 +600,9 @@ async def delete_session(session_id: uuid.UUID, db: AsyncSession = Depends(get_d
         select(Detection.id)
         .join(Frame, Detection.frame_id == Frame.id)
         .where(Frame.session_id == session_id)
+    )
+    await db.execute(
+        delete(Alert).where(Alert.detection_id.in_(detection_ids_stmt))
     )
     await db.execute(
         delete(TicketCheck).where(TicketCheck.detection_id.in_(detection_ids_stmt))
