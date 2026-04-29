@@ -1,14 +1,15 @@
-import { useState, useCallback, useRef } from "react";
+import { useState, useCallback, useEffect, useRef } from "react";
 import { Upload } from "lucide-react";
 import { Button } from "./ui/button";
 import { Input } from "./ui/input";
 import { Label } from "./ui/label";
 import { Slider } from "./ui/slider";
 import { Switch } from "./ui/switch";
-import type { MobileLprPose } from "../types";
+import type { MobileLprPose, ParkingZone } from "../types";
+import { getParkingZones } from "../services/api";
 
 interface UploadZoneProps {
-  onUpload: (file: File, fps: number, pose: MobileLprPose | null) => void;
+  onUpload: (file: File, fps: number, pose: MobileLprPose | null, zoneId: number | null) => void;
   isProcessing: boolean;
 }
 
@@ -21,7 +22,22 @@ export function UploadZone({ onUpload, isProcessing }: UploadZoneProps) {
   const [longitude, setLongitude] = useState("");
   const [headingDeg, setHeadingDeg] = useState("");
   const [poseError, setPoseError] = useState<string | null>(null);
+  const [zones, setZones] = useState<ParkingZone[]>([]);
+  const [selectedZoneId, setSelectedZoneId] = useState<number | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
+
+  useEffect(() => {
+    getParkingZones()
+      .then((z) => {
+        setZones(z);
+        if (z.length > 0 && selectedZoneId === null) {
+          setSelectedZoneId(z[0].id);
+        }
+      })
+      .catch(() => {
+        // Zone selector is optional — silently degrade if the API is unavailable.
+      });
+  }, []);
 
   const parsePose = (): MobileLprPose | null | "invalid" => {
     if (!mobileLprEnabled) return null;
@@ -73,7 +89,7 @@ export function UploadZone({ onUpload, isProcessing }: UploadZoneProps) {
       return;
     }
     setPoseError(null);
-    onUpload(selectedFile, fps[0], pose);
+    onUpload(selectedFile, fps[0], pose, selectedZoneId);
   };
 
   const openFilePicker = () => {
@@ -159,6 +175,28 @@ export function UploadZone({ onUpload, isProcessing }: UploadZoneProps) {
               className="w-full"
             />
           </div>
+
+          {zones.length > 0 && (
+            <div>
+              <Label htmlFor="zone-select" className="text-foreground">
+                Zonă parcare
+              </Label>
+              <select
+                id="zone-select"
+                className="mt-1 w-full rounded-md border border-input bg-background px-3 py-2 text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-blue-500"
+                value={selectedZoneId ?? ""}
+                onChange={(e) =>
+                  setSelectedZoneId(e.target.value ? Number(e.target.value) : null)
+                }
+              >
+                {zones.map((z) => (
+                  <option key={z.id} value={z.id}>
+                    {z.name} ({z.code})
+                  </option>
+                ))}
+              </select>
+            </div>
+          )}
 
           <div className="space-y-3 rounded-md border border-border bg-muted/30 p-3">
             <div className="flex items-center justify-between gap-3">

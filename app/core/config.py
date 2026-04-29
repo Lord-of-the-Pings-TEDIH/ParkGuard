@@ -76,6 +76,14 @@ class Settings(BaseSettings):
     # Minimum number of matching plates needed to positively identify the
     # lot being patrolled (non-GPS heuristic).
     LOT_HEURISTIC_MIN_PLATES: int = 3
+    # When hour_concentration >= threshold AND len(events) >= min_events,
+    # base_score is multiplied by this factor before bonuses are added.
+    OCCUPANCY_HOUR_CONCENTRATION_THRESHOLD: float = 0.7
+    OCCUPANCY_HOUR_CONCENTRATION_MIN_EVENTS: int = 5
+    OCCUPANCY_HOUR_CONCENTRATION_MULTIPLIER: float = 1.3
+    # Score is only flagged when event_count also meets this minimum.
+    # 0 = disabled (keeps existing behaviour, tests stay green by default).
+    OCCUPANCY_MIN_EVENTS_FOR_FLAG: int = 0
 
     # --- Mobile-LPR (Mobile License Plate Recognition) ---
     # Defaults for the police-car camera intrinsics used by

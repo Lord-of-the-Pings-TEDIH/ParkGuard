@@ -17,6 +17,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
 from app.core.database import AsyncSessionLocal, get_db
+from app.models.parking import ParkingZone
 from app.core.events import publish, subscribe, unsubscribe
 from app.models.detection import Detection, Frame, Session
 from app.models.parking import TicketCheck
@@ -111,6 +112,24 @@ def _estimate_sampled_total_frames(video_info: dict, fps_target: float) -> int |
 
     interval = max(1, round(video_fps / max(1.0, fps_target)))
     return max(1, (total_frames + interval - 1) // interval)
+
+
+async def _resolve_zone_id(explicit: int | None, db: AsyncSession) -> int | None:
+    """Pick a zone for the session in priority order.
+
+    1. explicit value from the form submission
+    2. DEFAULT_ZONE_ID from settings
+    3. first row in parking_zones (single DB round-trip)
+    4. None — no zones exist yet; ticket lookup will return "unknown"
+    """
+    if explicit is not None:
+        return explicit
+    if settings.DEFAULT_ZONE_ID is not None:
+        return settings.DEFAULT_ZONE_ID
+    result = await db.execute(
+        select(ParkingZone.id).order_by(ParkingZone.id).limit(1)
+    )
+    return result.scalar_one_or_none()
 
 
 def _build_mobile_lpr_for_session(session: Session) -> object | None:
@@ -446,6 +465,7 @@ async def create_session(
         video_path=dest,
     )
 
+    resolved_zone = await _resolve_zone_id(zone_id, db)
     session_kwargs = dict(
         id=session_id,
         source_filename=filename,
@@ -453,7 +473,7 @@ async def create_session(
         fps_target=effective_fps_target,
         frames_processed=0,
         total_frames=total_frames,
-        zone_id=zone_id,
+        zone_id=resolved_zone,
     )
     _apply_pose_to_session(session_kwargs, pose)
     new_session = Session(**session_kwargs)
@@ -508,6 +528,7 @@ async def create_session_from_test_file(
         video_path=dest,
     )
 
+    resolved_zone = await _resolve_zone_id(zone_id, db)
     session_kwargs = dict(
         id=session_id,
         source_filename=source.name,
@@ -515,7 +536,7 @@ async def create_session_from_test_file(
         fps_target=effective_fps_target,
         frames_processed=0,
         total_frames=total_frames,
-        zone_id=zone_id,
+        zone_id=resolved_zone,
     )
     _apply_pose_to_session(session_kwargs, pose)
     new_session = Session(**session_kwargs)

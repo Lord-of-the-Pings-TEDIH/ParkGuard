@@ -141,10 +141,10 @@ export function Dashboard() {
     }
   };
 
-  const handleUpload = async (file: File, fps: number) => {
+  const handleUpload = async (file: File, fps: number, _pose: MobileLprPose | null, zoneId: number | null) => {
     try {
       setError(null);
-      const session = await createSession(file, fps, mobileLprPoseRef.current);
+      const session = await createSession(file, fps, mobileLprPoseRef.current, zoneId);
       setActiveSession(session);
       setDetections([]);
       sessionCacheRef.current.set(session.id, session);

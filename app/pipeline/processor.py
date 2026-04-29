@@ -655,12 +655,14 @@ async def _resolve_spot_match(
     plate_text: str,
     mobile_lpr: MobileLPRContext,
     db: AsyncSession,
-) -> tuple[float, float, str, float | None, int | None] | None:
+) -> tuple[float, float, str, float | None, int | None, ParkingSpot | None] | None:
     """Project the track's best bbox to GPS and validate against ParkingSpot.
 
     Returns ``None`` if the geometry is degenerate (plate above the horizon).
-    Otherwise returns ``(target_lat, target_lon, status, distance_m, spot_id)``
+    Otherwise returns ``(target_lat, target_lon, status, distance_m, spot_id, owner_spot)``
     so the caller can stamp every detection in the track with the same result.
+    ``owner_spot`` is non-None when the foreign plate owns a different spot in
+    the same lot (X / X+1 neighbour enrichment).
     """
     bbox = track.best_conf_bbox or track.bbox
     bbox_xywh = (float(bbox[0]), float(bbox[1]), float(bbox[2]), float(bbox[3]))
@@ -686,6 +688,7 @@ async def _resolve_spot_match(
         spot_match.status,
         spot_match.distance_m,
         spot_match.spot.id if spot_match.spot is not None else None,
+        spot_match.owner_spot,
     )
 
 
@@ -762,7 +765,7 @@ async def _finalize_track_with_fallback(
     # Mobile-LPR: project the plate's pixel position to a GPS coordinate and
     # check it against the registered parking spots.  Skipped for static
     # cameras (mobile_lpr is None) or when the geometry is degenerate.
-    spot_result: tuple[float, float, str, float | None, int | None] | None = None
+    spot_result: tuple[float, float, str, float | None, int | None, ParkingSpot | None] | None = None
     if mobile_lpr is not None:
         spot_result = await _resolve_spot_match(
             track=track,
@@ -783,11 +786,12 @@ async def _finalize_track_with_fallback(
     #     track-level decision driven by the best-confidence frame, so they
     #     apply identically to every detection in the track.
     if spot_result is not None:
-        _, _, track_status, track_distance, track_spot_id = spot_result
+        _, _, track_status, track_distance, track_spot_id, track_owner_spot = spot_result
     else:
         track_status = None
         track_distance = None
         track_spot_id = None
+        track_owner_spot = None
 
     # Fetch all detections for this track in one query instead of N individual
     # db.get() calls — after the per-frame commits the identity map is expired,
@@ -854,6 +858,7 @@ async def _finalize_track_with_fallback(
                 detection_id=representative.id,
                 session_id=session_uuid,
                 db=db,
+                owner_spot=track_owner_spot,
             )
 
     track.finalized = True

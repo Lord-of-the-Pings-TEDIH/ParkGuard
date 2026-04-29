@@ -5,7 +5,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db
-from app.models.parking import ParkingTicket
+from app.models.parking import ParkingTicket, ParkingZone
 from app.models.parking_spot import ParkingSpot
 from app.schemas.occupancy import SuspiciousOccupancyOut
 from app.schemas.parking import (
@@ -13,9 +13,17 @@ from app.schemas.parking import (
     ParkingSpotOut,
     ParkingTicketIn,
     ParkingTicketOut,
+    ParkingZoneOut,
 )
 
 router = APIRouter()
+
+
+@router.get("/zones", response_model=List[ParkingZoneOut])
+async def list_zones(db: AsyncSession = Depends(get_db)):
+    """Return all parking zones (used by the zone selector in the upload form)."""
+    result = await db.execute(select(ParkingZone).order_by(ParkingZone.id))
+    return result.scalars().all()
 
 
 @router.get("/tickets", response_model=List[ParkingTicketOut])

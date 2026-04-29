@@ -59,6 +59,19 @@ FLAG_THRESHOLD: float = settings.OCCUPANCY_FLAG_THRESHOLD
 _LOOKBACK_DAYS: int = settings.OCCUPANCY_LOOKBACK_DAYS
 _DECAY_HALF_LIFE_DAYS: float = settings.OCCUPANCY_DECAY_HALF_LIFE_DAYS
 _DECAY_K: float = math.log(2) / _DECAY_HALF_LIFE_DAYS
+_HOUR_CONC_THRESHOLD: float = settings.OCCUPANCY_HOUR_CONCENTRATION_THRESHOLD
+_HOUR_CONC_MIN_EVENTS: int = settings.OCCUPANCY_HOUR_CONCENTRATION_MIN_EVENTS
+_HOUR_CONC_MULTIPLIER: float = settings.OCCUPANCY_HOUR_CONCENTRATION_MULTIPLIER
+_MIN_EVENTS_FOR_FLAG: int = settings.OCCUPANCY_MIN_EVENTS_FOR_FLAG
+
+
+def _should_flag(score: float, event_count: int, threshold: float = FLAG_THRESHOLD) -> bool:
+    """Return True when score AND event_count both clear their thresholds."""
+    if score < threshold:
+        return False
+    if _MIN_EVENTS_FOR_FLAG > 0 and event_count < _MIN_EVENTS_FOR_FLAG:
+        return False
+    return True
 
 
 def _time_weight(detected_at: datetime) -> float:
@@ -118,12 +131,16 @@ async def _recompute_score(
     db: AsyncSession,
 ) -> tuple[float, int, float | None, float | None]:
     """Return (score, distinct_days, hour_concentration, typical_hour)."""
-    cutoff = datetime.now(UTC) - timedelta(days=_LOOKBACK_DAYS)
+    # Use a naive UTC cutoff for the DB query so that both SQLite (which
+    # stores timestamps without timezone) and PostgreSQL work correctly.
+    # PostgreSQL accepts naive datetimes and treats them as UTC when the
+    # session timezone is UTC (the asyncpg default).
+    cutoff_naive = datetime.utcnow() - timedelta(days=_LOOKBACK_DAYS)
     result = await db.execute(
         select(SpotOccupancyEvent)
         .where(SpotOccupancyEvent.spot_id == spot_id)
         .where(SpotOccupancyEvent.plate_text == plate_text)
-        .where(SpotOccupancyEvent.detected_at >= cutoff)
+        .where(SpotOccupancyEvent.detected_at >= cutoff_naive)
         .order_by(SpotOccupancyEvent.detected_at)
     )
     events = result.scalars().all()
@@ -133,10 +150,24 @@ async def _recompute_score(
 
     now = datetime.now(UTC)
 
+    def _as_aware(dt: datetime) -> datetime:
+        # SQLite returns naive datetimes; treat them as UTC so tests work.
+        return dt if dt.tzinfo is not None else dt.replace(tzinfo=UTC)
+
     base_score = sum(
-        e.time_weight * _decay((now - e.detected_at).total_seconds() / 86400)
+        e.time_weight * _decay((now - _as_aware(e.detected_at)).total_seconds() / 86400)
         for e in events
     )
+
+    # Apply hour-concentration multiplier when events cluster at a consistent
+    # time of day and there are enough of them to be statistically meaningful.
+    hour_conc_early = _compute_hour_concentration(list(events))
+    if (
+        hour_conc_early is not None
+        and len(events) >= _HOUR_CONC_MIN_EVENTS
+        and hour_conc_early >= _HOUR_CONC_THRESHOLD
+    ):
+        base_score *= _HOUR_CONC_MULTIPLIER
 
     distinct_days = len({e.detected_at.date() for e in events})
 
@@ -173,6 +204,7 @@ async def record_occupancy_event(
     session_id: uuid.UUID | None,
     db: AsyncSession,
     flag_threshold: float = FLAG_THRESHOLD,
+    owner_spot: ParkingSpot | None = None,
 ) -> None:
     """Log a foreign-plate occupancy event and refresh the suspicion record.
 
@@ -217,7 +249,8 @@ async def record_occupancy_event(
     record = result.scalars().first()
 
     previously_flagged = record.is_flagged if record is not None else False
-    now_flagged = score >= flag_threshold
+    new_event_count = (record.event_count + 1) if record is not None else 1
+    now_flagged = _should_flag(score, new_event_count, flag_threshold)
 
     if record is None:
         db.add(
@@ -256,13 +289,24 @@ async def record_occupancy_event(
         hour_info = (
             f" (ora tipică: {typical_hour:.0f}h)" if typical_hour is not None else ""
         )
+        neighbour_info = ""
+        if (
+            owner_spot is not None
+            and owner_spot.spot_sequence is not None
+            and spot is not None
+            and spot.spot_sequence is not None
+        ):
+            delta = owner_spot.spot_sequence - spot.spot_sequence
+            neighbour_info = (
+                f" (proprietar: {owner_spot.spot_label}, Δseq={delta:+d})"
+            )
         db.add(
             Alert(
                 detection_id=detection_id,
                 alert_type="spot_misuse",
                 message=(
                     f"Plăcuța {plate_text} detectată de {record.event_count if record else 1}× "  # type: ignore[union-attr]
-                    f"pe locul {spot_label}{hour_info}"
+                    f"pe locul {spot_label}{hour_info}{neighbour_info}"
                 ),
                 is_resolved=False,
             )
@@ -406,6 +450,6 @@ async def cleanup_session_occupancy(session_id: uuid.UUID, db: AsyncSession) -> 
             record.accumulated_score = score
             record.hour_concentration = hour_conc
             record.typical_hour = typical_hour
-            record.is_flagged = score >= FLAG_THRESHOLD
+            record.is_flagged = _should_flag(score, remaining)
 
     await db.flush()

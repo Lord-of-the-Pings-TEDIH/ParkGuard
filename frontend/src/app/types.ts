@@ -10,6 +10,15 @@ export interface MobileLprPose {
   headingDeg: number;
 }
 
+export interface ParkingZone {
+  id: number;
+  name: string;
+  code: string;
+  grace_period_min: number;
+  is_active: boolean;
+  created_at: string;
+}
+
 export interface Detection {
   id: string;
   ocr_normalized_text: string;
@@ -53,6 +62,7 @@ export interface ParkingSpot {
   latitude: number | null;
   longitude: number | null;
   assigned_plate: string | null;
+  allowed_plates: string[] | null;
   is_occupied: boolean;
   updated_at: string;
 }
