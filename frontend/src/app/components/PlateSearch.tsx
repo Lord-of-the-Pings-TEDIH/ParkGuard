@@ -61,13 +61,11 @@ export function PlateSearch() {
   };
 
   return (
-    <div className="flex h-full min-h-0 flex-col border-border bg-card lg:border-l">
-      <div className="border-b border-border bg-gradient-to-r from-cyan-50 to-blue-50 p-3 dark:from-cyan-950 dark:to-blue-950 md:p-4">
-        <h3 className="mb-3 font-medium text-foreground">Registru</h3>
-
+    <div className="flex h-full min-h-0 flex-col bg-card">
+      <div className="border-b border-border p-3 flex-shrink-0">
         <div className="space-y-2">
           <div className="relative">
-            <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
+            <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
             <Input
               placeholder="Caută numere..."
               value={query}
@@ -88,7 +86,7 @@ export function PlateSearch() {
 
         {plates.length > 0 && (
           <p className="mt-2 text-xs text-muted-foreground">
-            {plates.length}
+            {plates.length} rezultate
           </p>
         )}
       </div>
