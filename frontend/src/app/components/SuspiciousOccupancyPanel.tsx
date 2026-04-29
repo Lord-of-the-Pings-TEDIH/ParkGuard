@@ -49,7 +49,7 @@ export function SuspiciousOccupancyPanel() {
       setRecords(occ);
       setAlerts(alr);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to load");
+      setError(err instanceof Error ? err.message : "Încărcarea datelor a eșuat");
     } finally {
       setLoading(false);
     }

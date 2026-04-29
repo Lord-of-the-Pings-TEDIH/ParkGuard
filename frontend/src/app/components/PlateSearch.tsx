@@ -51,8 +51,8 @@ export function PlateSearch() {
       if (signal.aborted) {
         return;
       }
-      console.error("Failed to search plates:", error);
-      setError(error instanceof Error ? error.message : "Search failed");
+      console.error("Eroare la căutarea numerelor:", error);
+      setError(error instanceof Error ? error.message : "Căutarea a eșuat");
     } finally {
       if (!signal.aborted) {
         setLoading(false);
