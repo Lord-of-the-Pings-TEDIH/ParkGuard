@@ -143,7 +143,7 @@ export function DetectionCard({ detection, index }: DetectionCardProps) {
           onClick={() => setIsExpanded(false)}
           role="dialog"
           aria-modal="true"
-          aria-label={`Plate ${detection.ocr_normalized_text} crop`}
+          aria-label={`Decupaj număr ${detection.ocr_normalized_text}`}
         >
           <motion.img
             layoutId={layoutId}

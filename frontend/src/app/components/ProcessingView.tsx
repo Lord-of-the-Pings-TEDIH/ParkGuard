@@ -138,7 +138,7 @@ export function ProcessingView({ session, detections, onCancel, onComplete }: Pr
               transition={{ duration: 1.5, repeat: Infinity }}
             >
               <div className="h-2 w-2 rounded-full bg-white" />
-              Live
+              În direct
             </motion.div>
           )}
         </div>

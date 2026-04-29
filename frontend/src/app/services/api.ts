@@ -78,7 +78,7 @@ async function fetchApi<T>(
 ): Promise<T> {
   const response = await fetch(url, options);
   if (!response.ok) {
-    let detail = `HTTP ${response.status}`;
+    let detail = `Eroare HTTP ${response.status}`;
     try {
       const data = await response.json();
       if (typeof data?.detail === "string" && data.detail.trim()) {

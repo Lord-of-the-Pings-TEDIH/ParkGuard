@@ -82,7 +82,7 @@ export function Dashboard() {
           setDetections(currentDetections);
           detectionsCacheRef.current.set(sessionId, currentDetections);
         } catch (err) {
-          console.error("Failed to refresh detections:", err);
+          console.error("Eroare la reîmprospătarea detectărilor:", err);
         }
       },
 
@@ -95,7 +95,7 @@ export function Dashboard() {
           setDetections(finalDetections);
           detectionsCacheRef.current.set(sessionId, finalDetections);
         } catch (err) {
-          console.error("Failed to finalize session data:", err);
+          console.error("Eroare la finalizarea datelor sesiunii:", err);
           // Fall back to what the event told us.
           setActiveSession((prev) =>
             prev ? { ...prev, frames_processed, frames_total: total_frames ?? prev.frames_total, status: "done" } : prev,
@@ -111,7 +111,7 @@ export function Dashboard() {
           setActiveSession(updatedSession);
           sessionCacheRef.current.set(sessionId, updatedSession);
         } catch (err) {
-          console.error("Failed to refresh failed session:", err);
+          console.error("Eroare la reîmprospătarea sesiunii eșuate:", err);
         }
         void fetchSessions();
       },
@@ -128,7 +128,7 @@ export function Dashboard() {
         sessionCacheRef.current.set(session.id, session);
       });
     } catch (err) {
-      console.error("Failed to fetch sessions:", err);
+      console.error("Eroare la încărcarea sesiunilor:", err);
     }
   };
 
@@ -137,7 +137,7 @@ export function Dashboard() {
       const files = await getHardcodedTestFiles();
       setTestFiles(files);
     } catch (err) {
-      console.error("Failed to fetch test files:", err);
+      console.error("Eroare la încărcarea fișierelor de test:", err);
     }
   };
 
@@ -163,10 +163,10 @@ export function Dashboard() {
           sessionCacheRef.current.set(updatedSession.id, updatedSession);
         })
         .catch((err) => {
-          setError(err instanceof Error ? err.message : "Failed to start processing");
+          setError(err instanceof Error ? err.message : "Pornirea procesării a eșuat");
         });
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to create session");
+      setError(err instanceof Error ? err.message : "Crearea sesiunii a eșuat");
     }
   };
 
@@ -189,10 +189,10 @@ export function Dashboard() {
           sessionCacheRef.current.set(updatedSession.id, updatedSession);
         })
         .catch((err) => {
-          setError(err instanceof Error ? err.message : "Failed to start processing");
+          setError(err instanceof Error ? err.message : "Pornirea procesării a eșuat");
         });
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to create test session");
+      setError(err instanceof Error ? err.message : "Crearea sesiunii de test a eșuat");
     } finally {
       setPendingTestFile(null);
     }
@@ -241,8 +241,8 @@ export function Dashboard() {
       if (selectionRequestId !== selectionRequestIdRef.current) {
         return;
       }
-      console.error("Failed to load session:", err);
-      setError(err instanceof Error ? err.message : "Failed to load session");
+      console.error("Eroare la încărcarea sesiunii:", err);
+      setError(err instanceof Error ? err.message : "Încărcarea sesiunii a eșuat");
     } finally {
       if (selectionRequestId === selectionRequestIdRef.current) {
         setPendingSessionId(null);
@@ -259,8 +259,8 @@ export function Dashboard() {
         handleReset();
       }
     } catch (err) {
-      console.error("Failed to delete session:", err);
-      setError(err instanceof Error ? err.message : "Failed to delete session");
+      console.error("Eroare la ștergerea sesiunii:", err);
+      setError(err instanceof Error ? err.message : "Ștergerea sesiunii a eșuat");
     }
   };
 
@@ -275,8 +275,8 @@ export function Dashboard() {
       await fetchSessions();
       handleReset();
     } catch (err) {
-      console.error("Failed to cancel session:", err);
-      setError(err instanceof Error ? err.message : "Failed to cancel session");
+      console.error("Eroare la anularea sesiunii:", err);
+      setError(err instanceof Error ? err.message : "Anularea sesiunii a eșuat");
     }
   };
 
