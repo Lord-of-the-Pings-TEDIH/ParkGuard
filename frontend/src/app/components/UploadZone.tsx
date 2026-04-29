@@ -1,7 +1,5 @@
 import { useState, useCallback, useEffect, useRef } from "react";
 import { Upload } from "lucide-react";
-import { Button } from "./ui/button";
-import { Input } from "./ui/input";
 import { Label } from "./ui/label";
 import { Slider } from "./ui/slider";
 import { Switch } from "./ui/switch";
@@ -34,9 +32,7 @@ export function UploadZone({ onUpload, isProcessing }: UploadZoneProps) {
           setSelectedZoneId(z[0].id);
         }
       })
-      .catch(() => {
-        // Zone selector is optional — silently degrade if the API is unavailable.
-      });
+      .catch(() => {});
   }, []);
 
   const parsePose = (): MobileLprPose | null | "invalid" => {
@@ -67,18 +63,13 @@ export function UploadZone({ onUpload, isProcessing }: UploadZoneProps) {
   const handleDrop = useCallback((e: React.DragEvent) => {
     e.preventDefault();
     setIsDragging(false);
-
     const file = e.dataTransfer.files[0];
-    if (file && isValidVideoFile(file)) {
-      setSelectedFile(file);
-    }
+    if (file && isValidVideoFile(file)) setSelectedFile(file);
   }, []);
 
   const handleFileSelect = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
-    if (file) {
-      setSelectedFile(file);
-    }
+    if (file) setSelectedFile(file);
   }, []);
 
   const handleSubmit = () => {
@@ -93,27 +84,27 @@ export function UploadZone({ onUpload, isProcessing }: UploadZoneProps) {
   };
 
   const openFilePicker = () => {
-    if (!isProcessing) {
-      fileInputRef.current?.click();
-    }
+    if (!isProcessing) fileInputRef.current?.click();
   };
 
   return (
-    <div className="flex h-full flex-col items-center justify-center gap-6 p-4 md:gap-8 md:p-12">
+    <div className="flex h-full flex-col items-center justify-center gap-7 p-10 md:p-16">
+      {/* Title */}
       <div className="text-center">
-        <h1 className="mb-3 bg-gradient-to-r from-blue-600 via-indigo-600 to-purple-600 bg-clip-text text-4xl font-bold tracking-tight text-transparent md:text-6xl">
-          RO-PLATE
-        </h1>
-        <p className="text-sm text-muted-foreground md:text-base">
-          Detectare și Monitorizare Numere Auto
+        <div className="mb-2 font-bold text-foreground" style={{ fontSize: 30, letterSpacing: "-0.02em" }}>
+          Procesare Video LPR
+        </div>
+        <p className="text-sm text-muted-foreground">
+          Detectare și monitorizare numere de înmatriculare
         </p>
       </div>
 
+      {/* Drop zone */}
       <div
-        className={`relative w-full max-w-2xl cursor-pointer rounded-lg border-2 border-dashed transition-all focus-within:ring-2 focus-within:ring-blue-500 ${
+        className={`relative w-full max-w-xl cursor-pointer rounded-xl border-2 border-dashed transition-all focus-within:ring-2 focus-within:ring-primary ${
           isDragging
-            ? "border-blue-500 bg-gradient-to-br from-blue-50 via-indigo-50 to-purple-50 dark:from-blue-950 dark:via-indigo-950 dark:to-purple-950"
-            : "border-border bg-card hover:border-blue-400 hover:bg-blue-50/40 dark:hover:border-blue-700 dark:hover:bg-blue-950/30"
+            ? "border-primary bg-primary/5"
+            : "border-border bg-card hover:border-primary/50 hover:bg-primary/[0.03]"
         }`}
         onDragOver={handleDragOver}
         onDragLeave={handleDragLeave}
@@ -129,16 +120,25 @@ export function UploadZone({ onUpload, isProcessing }: UploadZoneProps) {
         tabIndex={isProcessing ? -1 : 0}
         aria-label="Selectează clip video pentru procesare"
       >
-        <div className="p-8 text-center md:p-12">
-          <div className="mx-auto mb-4 flex h-12 w-12 items-center justify-center rounded-full bg-gradient-to-br from-blue-500 to-indigo-600 md:h-16 md:w-16">
-            <Upload className="h-6 w-6 text-white md:h-8 md:w-8" />
+        <div className="p-12 text-center">
+          <div
+            className="mx-auto mb-4 flex items-center justify-center rounded-xl bg-primary/10 border border-primary/20"
+            style={{ width: 52, height: 52 }}
+          >
+            <Upload className="h-6 w-6 text-primary" />
           </div>
-          <p className="mb-2 text-base font-medium text-foreground md:text-lg">
-            {selectedFile ? selectedFile.name : "Trageți clipul video aici"}
+          <p className="mb-1.5 font-semibold text-foreground" style={{ fontSize: 15 }}>
+            {selectedFile ? selectedFile.name : "Trageți fișierul video aici"}
           </p>
-          <p className="mb-4 text-xs text-muted-foreground md:text-sm">
-            .mp4, .mov, .avi, .mkv
-          </p>
+          <p className="mb-5 text-xs text-muted-foreground">.mp4 · .mov · .avi · .mkv</p>
+          <button
+            type="button"
+            onClick={(e) => { e.stopPropagation(); openFilePicker(); }}
+            disabled={isProcessing}
+            className="border border-border bg-card text-muted-foreground hover:text-foreground hover:border-border/80 rounded-lg px-5 py-2 text-sm cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
+          >
+            Răsfoiește
+          </button>
           <input
             type="file"
             ref={fileInputRef}
@@ -147,121 +147,93 @@ export function UploadZone({ onUpload, isProcessing }: UploadZoneProps) {
             onChange={handleFileSelect}
             disabled={isProcessing}
           />
-          <Button
-            variant="outline"
-            onClick={(e) => {
-              e.stopPropagation();
-              openFilePicker();
-            }}
-            disabled={isProcessing}
-          >
-            Răsfoiește Fișierele
-          </Button>
         </div>
       </div>
 
+      {/* Config panel */}
       {selectedFile && (
-        <div className="w-full max-w-2xl space-y-4 rounded-lg border border-border bg-card p-6 shadow-lg">
+        <div className="w-full max-w-xl rounded-xl border border-border bg-card p-6 shadow-sm space-y-5">
+
+          {/* FPS slider */}
           <div>
-            <div className="mb-3">
-              <Label className="text-foreground">Eșantionare: {fps[0]} FPS</Label>
+            <div className="flex justify-between items-center mb-3">
+              <Label className="text-foreground font-medium text-sm">Eșantionare</Label>
+              <span className="font-mono text-sm font-bold text-primary">{fps[0]} FPS</span>
             </div>
-            <Slider
-              value={fps}
-              onValueChange={setFps}
-              min={1}
-              max={10}
-              step={1}
-              className="w-full"
-            />
+            <Slider value={fps} onValueChange={setFps} min={1} max={10} step={1} className="w-full" />
+            <div className="flex justify-between text-[10px] text-muted-foreground mt-1.5">
+              <span>1 FPS (rapid)</span><span>10 FPS (precis)</span>
+            </div>
           </div>
 
+          {/* Zone selector */}
           {zones.length > 0 && (
             <div>
-              <Label htmlFor="zone-select" className="text-foreground">
+              <Label htmlFor="zone-select" className="text-foreground font-medium text-sm block mb-1.5">
                 Zonă parcare
               </Label>
               <select
                 id="zone-select"
-                className="mt-1 w-full rounded-md border border-input bg-background px-3 py-2 text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-blue-500"
+                className="w-full rounded-lg border border-border bg-background px-3 py-2 text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-primary"
                 value={selectedZoneId ?? ""}
-                onChange={(e) =>
-                  setSelectedZoneId(e.target.value ? Number(e.target.value) : null)
-                }
+                onChange={(e) => setSelectedZoneId(e.target.value ? Number(e.target.value) : null)}
               >
                 {zones.map((z) => (
-                  <option key={z.id} value={z.id}>
-                    {z.name} ({z.code})
-                  </option>
+                  <option key={z.id} value={z.id}>{z.name} ({z.code})</option>
                 ))}
               </select>
             </div>
           )}
 
-          <div className="space-y-3 rounded-md border border-border bg-muted/30 p-3">
+          {/* Mobile LPR */}
+          <div className="rounded-lg border border-border bg-muted/30 p-3 space-y-3">
             <div className="flex items-center justify-between gap-3">
-              <div className="space-y-0.5">
-                <Label className="text-foreground">Mod LPR Mobil</Label>
-                <p className="text-xs text-muted-foreground">
-                  Proiectează numerele pe GPS &amp; verifică locurile de parcare alocate
+              <div>
+                <Label className="text-foreground text-sm font-medium">Mod LPR Mobil</Label>
+                <p className="text-[11px] text-muted-foreground leading-tight mt-0.5">
+                  GPS + verificare locuri alocate
                 </p>
               </div>
               <Switch
                 checked={mobileLprEnabled}
-                onCheckedChange={(checked) => {
-                  setMobileLprEnabled(checked);
-                  setPoseError(null);
-                }}
+                onCheckedChange={(checked) => { setMobileLprEnabled(checked); setPoseError(null); }}
               />
             </div>
-
             {mobileLprEnabled && (
               <div className="grid grid-cols-3 gap-2">
-                <div>
-                  <Label htmlFor="lpr-lat" className="text-xs">Latitudine</Label>
-                  <Input
-                    id="lpr-lat"
-                    inputMode="decimal"
-                    placeholder="46.7701"
-                    value={latitude}
-                    onChange={(e) => setLatitude(e.target.value)}
-                  />
-                </div>
-                <div>
-                  <Label htmlFor="lpr-lon" className="text-xs">Longitudine</Label>
-                  <Input
-                    id="lpr-lon"
-                    inputMode="decimal"
-                    placeholder="23.5895"
-                    value={longitude}
-                    onChange={(e) => setLongitude(e.target.value)}
-                  />
-                </div>
-                <div>
-                  <Label htmlFor="lpr-hdg" className="text-xs">Direcție °</Label>
-                  <Input
-                    id="lpr-hdg"
-                    inputMode="decimal"
-                    placeholder="90"
-                    value={headingDeg}
-                    onChange={(e) => setHeadingDeg(e.target.value)}
-                  />
-                </div>
+                {[
+                  { id: "lpr-lat", label: "Latitudine", placeholder: "46.7701", value: latitude, onChange: setLatitude },
+                  { id: "lpr-lon", label: "Longitudine", placeholder: "23.5895", value: longitude, onChange: setLongitude },
+                  { id: "lpr-hdg", label: "Direcție °", placeholder: "90", value: headingDeg, onChange: setHeadingDeg },
+                ].map((f) => (
+                  <div key={f.id}>
+                    <Label htmlFor={f.id} className="text-[10px] text-muted-foreground">{f.label}</Label>
+                    <input
+                      id={f.id}
+                      inputMode="decimal"
+                      placeholder={f.placeholder}
+                      value={f.value}
+                      onChange={(e) => f.onChange(e.target.value)}
+                      className="mt-1 w-full rounded-md border border-border bg-background px-2 py-1.5 text-xs text-foreground focus:outline-none focus:ring-1 focus:ring-primary"
+                    />
+                  </div>
+                ))}
               </div>
             )}
-
             {poseError && (
-              <p className="text-xs text-red-600 dark:text-red-400">{poseError}</p>
+              <p className="text-[10px] text-destructive">{poseError}</p>
             )}
           </div>
 
-          <Button
+          {/* Submit */}
+          <button
+            type="button"
             onClick={handleSubmit}
             disabled={isProcessing}
-            className="w-full bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-700 hover:to-indigo-700"
+            className="w-full rounded-lg bg-primary text-primary-foreground font-semibold py-2.5 text-sm cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed hover:opacity-90 transition-opacity"
           >
             Procesează Video
-          </Button>
+          </button>
         </div>
       )}
     </div>
@@ -269,18 +241,7 @@ export function UploadZone({ onUpload, isProcessing }: UploadZoneProps) {
 }
 
 function isValidVideoFile(file: File): boolean {
-  const validTypes = [
-    "video/mp4",
-    "video/quicktime",
-    "video/x-msvideo",
-    "video/x-matroska",
-  ];
+  const validTypes = ["video/mp4", "video/quicktime", "video/x-msvideo", "video/x-matroska"];
   const validExtensions = [".mp4", ".mov", ".avi", ".mkv"];
-
-  const hasValidType = validTypes.includes(file.type);
-  const hasValidExtension = validExtensions.some((ext) =>
-    file.name.toLowerCase().endsWith(ext)
-  );
-
-  return hasValidType || hasValidExtension;
+  return validTypes.includes(file.type) || validExtensions.some((ext) => file.name.toLowerCase().endsWith(ext));
 }

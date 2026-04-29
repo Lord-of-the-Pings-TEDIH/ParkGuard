@@ -29,12 +29,7 @@ export function SessionHistory({
   onMobileLprPoseChange,
 }: SessionHistoryProps) {
   return (
-    <div className="flex h-full min-h-0 flex-col border-border bg-card lg:border-l">
-      <div className="border-b border-border bg-gradient-to-r from-purple-50 to-pink-50 p-3 dark:from-purple-950 dark:to-pink-950 md:p-4">
-        <h3 className="font-medium text-foreground">Sesiuni</h3>
-        <p className="text-xs text-muted-foreground">{sessions.length} procesări</p>
-      </div>
-
+    <div className="flex h-full min-h-0 flex-col bg-card">
       <div className="min-h-0 flex-1 overflow-y-auto">
         <div className="space-y-2 p-3">
           <MobileLprPanel onPoseChange={onMobileLprPoseChange} />

@@ -45,9 +45,9 @@ export function DetectionCard({ detection, index }: DetectionCardProps) {
       initial={{ opacity: 0, y: 20 }}
       animate={{ opacity: 1, y: 0 }}
       transition={{ duration: 0.3, delay: index * 0.05 }}
-      className={`relative rounded-lg border p-3 shadow-md transition-all md:p-4 ${
+      className={`relative rounded-lg border p-3 shadow-sm transition-all md:p-4 ${
         highlightAlert
-          ? "border-red-400 bg-gradient-to-br from-red-50 to-orange-50 dark:border-red-600 dark:from-red-950 dark:to-orange-950"
+          ? "border-destructive/40 bg-destructive/5"
           : "border-border bg-card"
       }`}
     >
@@ -121,7 +121,7 @@ export function DetectionCard({ detection, index }: DetectionCardProps) {
 
       {highlightAlert && (
         <motion.div
-          className="absolute -left-1 -top-1 h-2 w-2 rounded-full bg-gradient-to-r from-red-500 to-orange-500 shadow-lg"
+          className="absolute -left-1 -top-1 h-2 w-2 rounded-full bg-destructive shadow"
           animate={{ scale: [1, 1.3, 1] }}
           transition={{ duration: 1.5, repeat: Infinity }}
         />

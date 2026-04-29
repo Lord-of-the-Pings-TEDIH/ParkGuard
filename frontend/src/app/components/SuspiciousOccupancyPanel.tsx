@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { AlertTriangle, Bell, RefreshCw, X } from "lucide-react";
+import { Bell, RefreshCw, X } from "lucide-react";
 import { Switch } from "./ui/switch";
 import { Label } from "./ui/label";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "./ui/tabs";
@@ -28,7 +28,11 @@ function formatHour(h: number): string {
   return `${hh}:${mm}`;
 }
 
-export function SuspiciousOccupancyPanel() {
+interface SuspiciousOccupancyPanelProps {
+  onAlertCountChange?: (count: number) => void;
+}
+
+export function SuspiciousOccupancyPanel({ onAlertCountChange }: SuspiciousOccupancyPanelProps = {}) {
   const [records, setRecords] = useState<SuspiciousOccupancy[]>([]);
   const [alerts, setAlerts] = useState<Alert[]>([]);
   const [flaggedOnly, setFlaggedOnly] = useState(true);
@@ -101,40 +105,32 @@ export function SuspiciousOccupancyPanel() {
 
   const unresolvedCount = alerts.length;
 
+  useEffect(() => {
+    onAlertCountChange?.(unresolvedCount);
+  }, [unresolvedCount, onAlertCountChange]);
+
   return (
-    <div className="flex h-full min-h-0 flex-col border-border bg-card lg:border-l">
-      <div className="border-b border-border bg-gradient-to-r from-orange-50 to-red-50 px-3 py-2 dark:from-orange-950 dark:to-red-950 md:px-4 md:py-3">
-        <div className="flex items-center justify-between gap-2">
-          <div className="flex items-center gap-1.5">
-            <AlertTriangle className="h-4 w-4 text-orange-600 dark:text-orange-400" />
-            <h3 className="font-medium text-foreground">Abuz Loc de Parcare</h3>
-            {unresolvedCount > 0 && (
-              <span className="rounded-full bg-red-500 px-1.5 py-0.5 text-xs font-bold text-white">
-                {unresolvedCount}
-              </span>
-            )}
-          </div>
+    <div className="flex h-full min-h-0 flex-col bg-card">
+      <Tabs defaultValue="records" className="flex min-h-0 flex-1 flex-col">
+        <div className="flex items-center gap-2 mx-3 mt-2">
+          <TabsList className="grid flex-1 grid-cols-2">
+            <TabsTrigger value="records" className="text-xs">
+              Înregistrări {records.length > 0 && `(${records.length})`}
+            </TabsTrigger>
+            <TabsTrigger value="alerts" className="text-xs">
+              Alerte {unresolvedCount > 0 && `(${unresolvedCount})`}
+            </TabsTrigger>
+          </TabsList>
           <button
             type="button"
             onClick={() => void fetchAll()}
             disabled={loading}
-            className="rounded p-1 text-muted-foreground hover:text-foreground disabled:opacity-40"
+            className="rounded p-1 text-muted-foreground hover:text-foreground disabled:opacity-40 flex-shrink-0"
             title="Actualizează"
           >
             <RefreshCw className={`h-3.5 w-3.5 ${loading ? "animate-spin" : ""}`} />
           </button>
         </div>
-      </div>
-
-      <Tabs defaultValue="records" className="flex min-h-0 flex-1 flex-col">
-        <TabsList className="mx-3 mt-2 grid w-auto grid-cols-2">
-          <TabsTrigger value="records" className="text-xs">
-            Înregistrări {records.length > 0 && `(${records.length})`}
-          </TabsTrigger>
-          <TabsTrigger value="alerts" className="text-xs">
-            Alerte {unresolvedCount > 0 && `(${unresolvedCount})`}
-          </TabsTrigger>
-        </TabsList>
 
         {/* Occupancy Records tab */}
         <TabsContent value="records" className="min-h-0 flex-1 overflow-y-auto mt-0">
