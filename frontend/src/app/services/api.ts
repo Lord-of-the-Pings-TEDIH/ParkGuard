@@ -1,7 +1,10 @@
 import type {
+  Alert,
+  Camera,
   Detection,
   MobileLprPose,
   ParkingSpot,
+  ParkingZone,
   Plate,
   Session,
   SpotMatchStatus,
@@ -48,9 +51,11 @@ interface BackendParkingSpot {
   id: number;
   spot_label: string;
   parking_lot_id: number;
+  spot_sequence: number | null;
   latitude: number | null;
   longitude: number | null;
   assigned_plate: string | null;
+  allowed_plates: string[] | null;
   is_occupied: boolean;
   updated_at: string;
 }
@@ -154,9 +159,11 @@ function mapParkingSpot(spot: BackendParkingSpot): ParkingSpot {
     id: spot.id,
     spot_label: spot.spot_label,
     parking_lot_id: spot.parking_lot_id,
+    spot_sequence: spot.spot_sequence ?? null,
     latitude: spot.latitude,
     longitude: spot.longitude,
     assigned_plate: spot.assigned_plate,
+    allowed_plates: spot.allowed_plates ?? null,
     is_occupied: spot.is_occupied,
     updated_at: spot.updated_at,
   };
@@ -239,6 +246,7 @@ export async function createSession(
   file: File,
   fpsTarget: number,
   pose?: MobileLprPose | null,
+  zoneId?: number | null,
 ): Promise<Session> {
   const formData = new FormData();
   formData.append("file", file);
@@ -247,6 +255,9 @@ export async function createSession(
     formData.append("gps_latitude", String(pose.latitude));
     formData.append("gps_longitude", String(pose.longitude));
     formData.append("gps_heading_deg", String(pose.headingDeg));
+  }
+  if (zoneId != null) {
+    formData.append("zone_id", String(zoneId));
   }
 
   const session = await fetchApi<BackendSession>(`${API_BASE}/sessions`, {
@@ -268,21 +279,27 @@ export async function getHardcodedTestFiles(): Promise<string[]> {
 export async function createSessionFromHardcodedTest(
   filename: string,
   pose?: MobileLprPose | null,
+  zoneId?: number | null,
 ): Promise<Session> {
-  const init: RequestInit = { method: "POST" };
+  const formData = new FormData();
   if (pose) {
-    const formData = new FormData();
     formData.append("gps_latitude", String(pose.latitude));
     formData.append("gps_longitude", String(pose.longitude));
     formData.append("gps_heading_deg", String(pose.headingDeg));
-    init.body = formData;
+  }
+  if (zoneId != null) {
+    formData.append("zone_id", String(zoneId));
   }
 
   const session = await fetchApi<BackendSession>(
     `${API_BASE}/sessions/test-files/${encodeURIComponent(filename)}`,
-    init,
+    { method: "POST", body: formData },
   );
   return mapSession(session);
+}
+
+export async function getParkingZones(): Promise<ParkingZone[]> {
+  return fetchApi<ParkingZone[]>(`${API_BASE}/parking/zones`);
 }
 
 export async function startSessionProcessing(id: string): Promise<Session> {
@@ -377,6 +394,19 @@ export async function dismissSuspiciousOccupancy(recordId: number): Promise<void
   });
 }
 
+export async function getAlerts(resolved?: boolean): Promise<Alert[]> {
+  const params = resolved !== undefined ? `?resolved=${resolved}` : "";
+  return fetchApi<Alert[]>(`${API_BASE}/alerts${params}`);
+}
+
+export async function resolveAlert(alertId: number): Promise<Alert> {
+  return fetchApi<Alert>(`${API_BASE}/alerts/${alertId}/resolve`, { method: "POST" });
+}
+
+export async function deleteAlert(alertId: number): Promise<void> {
+  await fetchApi<void>(`${API_BASE}/alerts/${alertId}`, { method: "DELETE" });
+}
+
 export async function searchPlates(
   query: string,
   county?: string,
@@ -390,4 +420,39 @@ export async function searchPlates(
     signal,
   });
   return plates.map(mapPlate);
+}
+
+export interface CameraIn {
+  name: string;
+  stream_url: string;
+  parking_lot_id: number;
+  is_active?: boolean;
+}
+
+export async function getCameras(): Promise<Camera[]> {
+  return fetchApi<Camera[]>(`${API_BASE}/cameras`);
+}
+
+export async function getCamera(id: number): Promise<Camera> {
+  return fetchApi<Camera>(`${API_BASE}/cameras/${id}`);
+}
+
+export async function createCamera(payload: CameraIn): Promise<Camera> {
+  return fetchApi<Camera>(`${API_BASE}/cameras`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+}
+
+export async function updateCamera(id: number, payload: CameraIn): Promise<Camera> {
+  return fetchApi<Camera>(`${API_BASE}/cameras/${id}`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+}
+
+export async function deleteCamera(id: number): Promise<void> {
+  await fetchApi<void>(`${API_BASE}/cameras/${id}`, { method: "DELETE" });
 }

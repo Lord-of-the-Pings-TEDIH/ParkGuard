@@ -59,6 +59,18 @@ class Session(Base):
     gps_validation_status: Mapped[str | None] = mapped_column(String(20), nullable=True)
     gps_validation_warnings: Mapped[str | None] = mapped_column(Text, nullable=True)
 
+    # Parking-zone context: when set, lookup_ticket uses this zone instead of
+    # the global DEFAULT_ZONE_ID fallback.  NULL = use server default.
+    zone_id: Mapped[int | None] = mapped_column(
+        Integer, ForeignKey("parking_zones.id"), nullable=True
+    )
+
+    # Lot heuristic: set after finalization when the pipeline infers which
+    # parking lot the patrol was filming (non-GPS sessions only).
+    identified_lot_id: Mapped[int | None] = mapped_column(
+        Integer, ForeignKey("parking_lots.id"), nullable=True
+    )
+
     # Relationships
     frames: Mapped[list["Frame"]] = relationship(
         back_populates="session", cascade="all, delete-orphan"

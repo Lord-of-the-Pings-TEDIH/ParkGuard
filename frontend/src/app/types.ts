@@ -10,6 +10,15 @@ export interface MobileLprPose {
   headingDeg: number;
 }
 
+export interface ParkingZone {
+  id: number;
+  name: string;
+  code: string;
+  grace_period_min: number;
+  is_active: boolean;
+  created_at: string;
+}
+
 export interface Detection {
   id: string;
   ocr_normalized_text: string;
@@ -49,11 +58,22 @@ export interface ParkingSpot {
   id: number;
   spot_label: string;
   parking_lot_id: number;
+  spot_sequence: number | null;
   latitude: number | null;
   longitude: number | null;
   assigned_plate: string | null;
+  allowed_plates: string[] | null;
   is_occupied: boolean;
   updated_at: string;
+}
+
+export interface Camera {
+  id: number;
+  name: string;
+  stream_url: string;
+  parking_lot_id: number;
+  is_active: boolean;
+  created_at: string;
 }
 
 export interface Plate {
@@ -75,6 +95,15 @@ export interface SessionStats {
   active_count: number;
 }
 
+export interface Alert {
+  id: number;
+  detection_id: string | null;
+  alert_type: string;
+  message: string | null;
+  is_resolved: boolean;
+  created_at: string;
+}
+
 export interface SuspiciousOccupancy {
   id: number;
   spot_id: number;
@@ -84,6 +113,8 @@ export interface SuspiciousOccupancy {
   event_count: number;
   distinct_days: number;
   accumulated_score: number;
+  hour_concentration: number | null;
+  typical_hour: number | null;
   first_seen_at: string;
   last_seen_at: string;
   is_flagged: boolean;

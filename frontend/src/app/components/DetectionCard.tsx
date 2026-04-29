@@ -101,7 +101,7 @@ export function DetectionCard({ detection, index }: DetectionCardProps) {
           <div className="mt-2 flex flex-wrap items-center gap-3 text-xs text-muted-foreground">
             <span>Acuratețe: {(detection.detection_confidence * 100).toFixed(1)}%</span>
             <span className="uppercase tracking-wide">
-              {detection.voting_tag === "final" ? "Final" : "Nefinalizat"}
+              {detection.voting_tag === "final" ? "Finalizat" : "Nefinalizat"}
             </span>
             <span>Detectări: {detection.occurrences}x</span>
             {detection.ocr_raw_text !== detection.ocr_normalized_text && (

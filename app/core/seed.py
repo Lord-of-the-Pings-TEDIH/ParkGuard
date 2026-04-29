@@ -18,25 +18,26 @@ logger = logging.getLogger(__name__)
 # in that video naturally trips the WRONG_PLATE branch of the validator and
 # feeds the suspicious-occupancy scoring engine.
 #
-# Spot positions are spread along latitude in ~3 m steps (delta 0.00003°)
-# so each plate's projected coordinate lands closest to a single owner.
-# Spaced tighter than the 40 m search radius on purpose: it is realistic for
-# a residential block, and the haversine refinement in
-# validate_parking_at_location picks the nearest spot deterministically.
+# Spot positions are spread along latitude in ~10 m steps (delta 0.00009°  ≈ 10.02 m).
+# Realistic residential-lot spacing; well within the 40 m search radius so
+# the haversine refinement in validate_parking_at_location always resolves
+# to the nearest correct spot.  assigned_plate values are stored in compact
+# (non-alnum stripped, uppercase) form to match the OCR canonical.
 _DEMO_PARKING_LOT_NAME = "Bloc Rezidențial — Strada Demo"
 _DEMO_PARKING_LOT_LOCATION = "Zalău, jud. Sălaj"
-_DEMO_SPOTS: list[tuple[str, float, float, str | None]] = [
-    # (label, latitude, longitude, assigned_plate)
-    ("A-01", 47.258250, 23.254340, "MM 88 OWN"),
-    ("A-02", 47.258280, 23.254340, "AB 12 ION"),
-    ("A-03", 47.258310, 23.254340, "BV 22 POP"),
-    ("A-04", 47.258340, 23.254340, "SB 33 STN"),
-    ("A-05", 47.258370, 23.254340, "B 99 GRG"),
-    ("A-06", 47.258400, 23.254340, "TM 11 RDU"),
-    ("A-07", 47.258430, 23.254340, "CT 44 ELN"),
-    ("A-08", 47.258460, 23.254340, "AR 55 VLA"),
-    ("A-09", 47.258490, 23.254340, "DJ 66 ANA"),
-    ("A-10", 47.258520, 23.254340, "GL 77 MIH"),
+_DEMO_SPOTS: list[tuple[str, float, float, str | None, int, list[str] | None]] = [
+    # (label, latitude, longitude, assigned_plate, spot_sequence, allowed_plates)
+    # A-01 has an allowed_plates fixture so the co-use path is exercisable in demo.
+    ("A-01", 47.258250, 23.254340, "MM88OWN",  1, ["B11AAA"]),
+    ("A-02", 47.258340, 23.254340, "AB12ION",  2, None),
+    ("A-03", 47.258430, 23.254340, "BV22POP",  3, None),
+    ("A-04", 47.258520, 23.254340, "SB33STN",  4, None),
+    ("A-05", 47.258610, 23.254340, "B99GRG",   5, None),
+    ("A-06", 47.258700, 23.254340, "TM11RDU",  6, None),
+    ("A-07", 47.258790, 23.254340, "CT44ELN",  7, None),
+    ("A-08", 47.258880, 23.254340, "AR55VLA",  8, None),
+    ("A-09", 47.258970, 23.254340, "DJ66ANA",  9, None),
+    ("A-10", 47.259060, 23.254340, "GL77MIH", 10, None),
 ]
 
 async def _seed_residential_lot(session: AsyncSession) -> None:
@@ -74,7 +75,7 @@ async def _seed_residential_lot(session: AsyncSession) -> None:
         ).scalars().all()
     }
 
-    for label, lat, lon, plate in _DEMO_SPOTS:
+    for label, lat, lon, plate, seq, allowed in _DEMO_SPOTS:
         spot = existing_spots.get(label)
         if spot is None:
             session.add(
@@ -84,6 +85,8 @@ async def _seed_residential_lot(session: AsyncSession) -> None:
                     latitude=lat,
                     longitude=lon,
                     assigned_plate=plate,
+                    spot_sequence=seq,
+                    allowed_plates=allowed,
                 )
             )
         else:
@@ -92,6 +95,8 @@ async def _seed_residential_lot(session: AsyncSession) -> None:
             spot.latitude = lat
             spot.longitude = lon
             spot.assigned_plate = plate
+            spot.spot_sequence = seq
+            spot.allowed_plates = allowed
 
     await session.commit()
 
@@ -109,8 +114,8 @@ async def seed_db(session: AsyncSession) -> None:
         return
 
     logger.info("Seeding database with initial parking test data...")
-    
-    # Create the single zone
+
+    # Primary zone — all seeded tickets and subscriptions are pinned here.
     zone = ParkingZone(
         name="Downtown Zone",
         code="DT-01",
@@ -118,6 +123,14 @@ async def seed_db(session: AsyncSession) -> None:
         is_active=True
     )
     session.add(zone)
+    # Second zone — gives the frontend zone dropdown more than one option.
+    zone2 = ParkingZone(
+        name="Residential Zone",
+        code="ZN-02",
+        grace_period_min=10,
+        is_active=True,
+    )
+    session.add(zone2)
     await session.flush()
     
     now = datetime.now(timezone.utc)

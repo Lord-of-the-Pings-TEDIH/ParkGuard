@@ -17,7 +17,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
 from app.core.database import AsyncSessionLocal, get_db
+from app.models.parking import ParkingZone
 from app.core.events import publish, subscribe, unsubscribe
+from app.models.alert import Alert
 from app.models.detection import Detection, Frame, Session
 from app.models.parking import TicketCheck
 from app.pipeline.ocr import PlateReader
@@ -113,6 +115,24 @@ def _estimate_sampled_total_frames(video_info: dict, fps_target: float) -> int |
     return max(1, (total_frames + interval - 1) // interval)
 
 
+async def _resolve_zone_id(explicit: int | None, db: AsyncSession) -> int | None:
+    """Pick a zone for the session in priority order.
+
+    1. explicit value from the form submission
+    2. DEFAULT_ZONE_ID from settings
+    3. first row in parking_zones (single DB round-trip)
+    4. None — no zones exist yet; ticket lookup will return "unknown"
+    """
+    if explicit is not None:
+        return explicit
+    if settings.DEFAULT_ZONE_ID is not None:
+        return settings.DEFAULT_ZONE_ID
+    result = await db.execute(
+        select(ParkingZone.id).order_by(ParkingZone.id).limit(1)
+    )
+    return result.scalar_one_or_none()
+
+
 def _build_mobile_lpr_for_session(session: Session) -> object | None:
     """Resolve the geolocation context for a session, if GPS pose is set.
 
@@ -146,12 +166,14 @@ async def _run_processing_job(session_id: uuid.UUID) -> None:
             session = await db.get(Session, session_id)
             mobile_lpr = _build_mobile_lpr_for_session(session) if session else None
             ocr_batch = _recognize_plates_batch if settings.OCR_BATCH_PER_FRAME else None
+            zone_id = (session.zone_id if session else None) or settings.DEFAULT_ZONE_ID
             await process_session(
                 session_id,
                 db,
                 ocr=_recognize_plate,
                 ocr_batch=ocr_batch,
                 mobile_lpr=mobile_lpr,
+                zone_id=zone_id,
             )
     except asyncio.CancelledError:
         async with AsyncSessionLocal() as db:
@@ -416,6 +438,7 @@ async def create_session(
     gps_latitude: float | None = Form(default=None),
     gps_longitude: float | None = Form(default=None),
     gps_heading_deg: float | None = Form(default=None),
+    zone_id: int | None = Form(default=None),
     db: AsyncSession = Depends(get_db),
 ):
     session_id = uuid.uuid4()
@@ -443,6 +466,7 @@ async def create_session(
         video_path=dest,
     )
 
+    resolved_zone = await _resolve_zone_id(zone_id, db)
     session_kwargs = dict(
         id=session_id,
         source_filename=filename,
@@ -450,6 +474,7 @@ async def create_session(
         fps_target=effective_fps_target,
         frames_processed=0,
         total_frames=total_frames,
+        zone_id=resolved_zone,
     )
     _apply_pose_to_session(session_kwargs, pose)
     new_session = Session(**session_kwargs)
@@ -480,6 +505,7 @@ async def create_session_from_test_file(
     gps_latitude: float | None = Form(default=None),
     gps_longitude: float | None = Form(default=None),
     gps_heading_deg: float | None = Form(default=None),
+    zone_id: int | None = Form(default=None),
     db: AsyncSession = Depends(get_db),
 ):
     source = _resolve_test_upload_file(filename)
@@ -503,6 +529,7 @@ async def create_session_from_test_file(
         video_path=dest,
     )
 
+    resolved_zone = await _resolve_zone_id(zone_id, db)
     session_kwargs = dict(
         id=session_id,
         source_filename=source.name,
@@ -510,6 +537,7 @@ async def create_session_from_test_file(
         fps_target=effective_fps_target,
         frames_processed=0,
         total_frames=total_frames,
+        zone_id=resolved_zone,
     )
     _apply_pose_to_session(session_kwargs, pose)
     new_session = Session(**session_kwargs)
@@ -572,6 +600,9 @@ async def delete_session(session_id: uuid.UUID, db: AsyncSession = Depends(get_d
         select(Detection.id)
         .join(Frame, Detection.frame_id == Frame.id)
         .where(Frame.session_id == session_id)
+    )
+    await db.execute(
+        delete(Alert).where(Alert.detection_id.in_(detection_ids_stmt))
     )
     await db.execute(
         delete(TicketCheck).where(TicketCheck.detection_id.in_(detection_ids_stmt))

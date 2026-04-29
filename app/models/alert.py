@@ -12,8 +12,10 @@ class Alert(Base):
     __tablename__ = "alerts"
 
     id: Mapped[int] = mapped_column(primary_key=True)
-    detection_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("detections.id"), nullable=False
+    # Nullable so alerts can be generated for occupancy events that have no
+    # single representative detection (e.g. demo seed data with session_id=NULL).
+    detection_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("detections.id"), nullable=True
     )
     alert_type: Mapped[str] = mapped_column(String(50), nullable=False)
     message: Mapped[str | None] = mapped_column(String(500))
@@ -23,4 +25,4 @@ class Alert(Base):
     )
 
     # Relationships
-    detection: Mapped["Detection"] = relationship()
+    detection: Mapped["Detection | None"] = relationship()

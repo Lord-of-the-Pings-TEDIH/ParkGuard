@@ -56,7 +56,7 @@ export function SessionHistory({
                       ? "border-amber-500 bg-gradient-to-r from-amber-100 to-orange-100 text-amber-900 dark:border-amber-500 dark:from-amber-900 dark:to-orange-900 dark:text-amber-200"
                       : "border-amber-300 bg-gradient-to-r from-amber-50 to-orange-50 text-amber-800 hover:from-amber-100 hover:to-orange-100 dark:border-amber-700 dark:from-amber-950 dark:to-orange-950 dark:text-amber-300"
                   } disabled:cursor-not-allowed disabled:opacity-70`}
-                  title={`Run ${filename}`}
+                  title={`Rulează ${filename}`}
                 >
                   <div className="flex items-center gap-2">
                     {pendingTestFile === filename ? (

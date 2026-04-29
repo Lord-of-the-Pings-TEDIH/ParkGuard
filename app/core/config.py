@@ -57,6 +57,34 @@ class Settings(BaseSettings):
     # granularity at the default 5 FPS target (12 frames = ~2.4 s of video).
     PROCESSOR_COMMIT_EVERY_FRAMES: int = 12
 
+    # --- Ticket zone ---
+    # When a session is processed without an explicit zone_id, fall back to
+    # this zone so ticket/subscription lookups actually match seeded data.
+    # Set to the integer primary key of the relevant ParkingZone row.
+    DEFAULT_ZONE_ID: int | None = None
+
+    # --- Occupancy / spot-misuse scoring ---
+    # How many calendar days back to look when computing suspicion scores.
+    # Darius's spec: "timp de 6 luni, 20 de treceri succesive" → 180 days.
+    OCCUPANCY_LOOKBACK_DAYS: int = 180
+    # Exponential-decay half-life.  With a 180-day window, 30 days means
+    # events from last week still count at ~0.86 weight while events from
+    # 5 months ago weigh ~0.09.
+    OCCUPANCY_DECAY_HALF_LIFE_DAYS: float = 30.0
+    # Score above which a (spot, plate) pair is flagged for human review.
+    OCCUPANCY_FLAG_THRESHOLD: float = 8.0
+    # Minimum number of matching plates needed to positively identify the
+    # lot being patrolled (non-GPS heuristic).
+    LOT_HEURISTIC_MIN_PLATES: int = 3
+    # When hour_concentration >= threshold AND len(events) >= min_events,
+    # base_score is multiplied by this factor before bonuses are added.
+    OCCUPANCY_HOUR_CONCENTRATION_THRESHOLD: float = 0.7
+    OCCUPANCY_HOUR_CONCENTRATION_MIN_EVENTS: int = 5
+    OCCUPANCY_HOUR_CONCENTRATION_MULTIPLIER: float = 1.3
+    # Score is only flagged when event_count also meets this minimum.
+    # 5 = require at least 5 distinct patrol passes before flagging.
+    OCCUPANCY_MIN_EVENTS_FOR_FLAG: int = 5
+
     # --- Mobile-LPR (Mobile License Plate Recognition) ---
     # Defaults for the police-car camera intrinsics used by
     # PlateGeolocationCalculator.  Override per-deployment in .env.  The
