@@ -95,6 +95,15 @@ export interface SessionStats {
   active_count: number;
 }
 
+export interface Alert {
+  id: number;
+  detection_id: string | null;
+  alert_type: string;
+  message: string | null;
+  is_resolved: boolean;
+  created_at: string;
+}
+
 export interface SuspiciousOccupancy {
   id: number;
   spot_id: number;

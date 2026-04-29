@@ -44,7 +44,7 @@ from app.pipeline.plate_validator import (
     normalize_plate,
 )
 from app.services.occupancy import record_occupancy_event, reset_spot_suspicion
-from app.services.parking_validation import validate_parking_at_location
+from app.services.parking_validation import find_owner_spot, validate_parking_at_location
 from app.services.ticket_lookup import lookup_ticket
 
 logger = logging.getLogger(__name__)
@@ -892,12 +892,17 @@ async def _apply_lot_heuristic(
     the LOT_HEURISTIC_MIN_PLATES threshold:
 
     1. session.identified_lot_id is updated.
-    2. Every finalized detection whose plate is NOT assigned to that lot
-       gets spot_match_status = "WRONG_PLATE" — the operator can then see
-       which foreign plates appeared in the lot even without GPS coordinates.
+    2. Every finalized detection whose plate is NOT assigned (or whitelisted)
+       at that lot gets spot_match_status = "WRONG_PLATE".
+    3. An occupancy event is recorded for each foreign plate so the temporal
+       suspicion scorer accumulates a pattern across multiple patrols.
+       Without GPS we can't know the exact spot, so each foreign plate is
+       assigned to a candidate spot (an unaccounted spot in the lot, in
+       spot_sequence order).  The same plate maps to the same candidate
+       consistently across sessions as long as the DB doesn't change.
     """
     from collections import Counter
-    from app.models.parking_lot import ParkingLot
+    from app.models.parking_lot import ParkingLot  # noqa: F401
 
     min_plates = int(settings.LOT_HEURISTIC_MIN_PLATES)
 
@@ -914,13 +919,18 @@ async def _apply_lot_heuristic(
     all_spots: list[ParkingSpot] = list(spots_result.scalars().all())
 
     lot_votes: Counter[int] = Counter()
-    # Map lot_id → set of canonical assigned plates in that lot.
+    # Map lot_id → set of canonical plates allowed in that lot
+    # (assigned_plate + allowed_plates whitelist).
     lot_canonical_plates: dict[int, set[str]] = {}
     for spot in all_spots:
         canonical_assigned = _NON_ALNUM_RE_LOT.sub(
             "", (spot.assigned_plate or "").upper()
         )
         lot_canonical_plates.setdefault(spot.parking_lot_id, set()).add(canonical_assigned)
+        for extra in (spot.allowed_plates or []):
+            lot_canonical_plates[spot.parking_lot_id].add(
+                _NON_ALNUM_RE_LOT.sub("", extra.upper())
+            )
         if canonical_assigned in canonical_finalized:
             lot_votes[spot.parking_lot_id] += 1
 
@@ -936,23 +946,68 @@ async def _apply_lot_heuristic(
     if session is not None:
         session.identified_lot_id = best_lot_id
 
-    # Plates assigned to the identified lot.
-    lot_assigned_canonical = lot_canonical_plates.get(best_lot_id, set())
+    # All plates legitimately allowed in the identified lot.
+    lot_allowed_canonical = lot_canonical_plates.get(best_lot_id, set())
 
-    # Mark non-lot plates as WRONG_PLATE on all their detections.
-    for canonical_plate, normalized_plate in canonical_finalized.items():
-        if canonical_plate in lot_assigned_canonical:
-            continue  # legitimate — belongs to this lot
-        # Update all detections for this plate that don't yet have a spot verdict.
-        det_result = await db.execute(
+    # Spots in the identified lot ordered for stable candidate assignment.
+    lot_spots_result = await db.execute(
+        select(ParkingSpot)
+        .where(ParkingSpot.parking_lot_id == best_lot_id)
+        .order_by(ParkingSpot.spot_sequence.asc().nulls_last(), ParkingSpot.id.asc())
+    )
+    lot_spots: list[ParkingSpot] = list(lot_spots_result.scalars().all())
+
+    # Candidate spots: those whose owner was NOT seen in this session.
+    # Used as best-guess spot for occupancy events on the non-GPS path.
+    candidate_spots = [
+        s for s in lot_spots
+        if s.assigned_plate is not None
+        and _NON_ALNUM_RE_LOT.sub("", s.assigned_plate.upper()) not in canonical_finalized
+    ] or lot_spots
+
+    # Collect foreign plates (not assigned/whitelisted in the identified lot).
+    foreign_plates = [
+        (canonical_plate, normalized_plate)
+        for canonical_plate, normalized_plate in canonical_finalized.items()
+        if canonical_plate not in lot_allowed_canonical
+    ]
+
+    for idx, (_, normalized_plate) in enumerate(foreign_plates):
+        # Fetch all detections for this plate in the session.
+        all_dets_result = await db.execute(
             select(Detection)
             .join(Frame, Detection.frame_id == Frame.id)
             .where(Frame.session_id == session_id)
             .where(Detection.ocr_normalized_text == normalized_plate)
-            .where(Detection.spot_match_status.is_(None))
+            .order_by(Detection.created_at)
         )
-        for det in det_result.scalars().all():
-            det.spot_match_status = "WRONG_PLATE"
+        all_dets = all_dets_result.scalars().all()
+        if not all_dets:
+            continue
+
+        for det in all_dets:
+            if det.spot_match_status is None:
+                det.spot_match_status = "WRONG_PLATE"
+
+        candidate_spot = candidate_spots[idx % len(candidate_spots)]
+        representative = all_dets[0]
+        compact_text = compact_plate(normalized_plate)
+
+        owner_spot = await find_owner_spot(
+            plate_text=compact_text,
+            parking_lot_id=best_lot_id,
+            exclude_spot_id=candidate_spot.id,
+            db=db,
+        )
+        await record_occupancy_event(
+            spot_id=candidate_spot.id,
+            plate_text=compact_text,
+            detected_at=representative.created_at,
+            detection_id=representative.id,
+            session_id=session_id,
+            db=db,
+            owner_spot=owner_spot,
+        )
 
     await db.flush()
     logger.info(

@@ -13,7 +13,8 @@ from app.services.occupancy import _should_flag, FLAG_THRESHOLD
 
 class TestShouldFlag:
     def test_score_above_threshold_no_gate(self) -> None:
-        assert _should_flag(FLAG_THRESHOLD + 1.0, event_count=1) is True
+        with patch.object(occ_mod, "_MIN_EVENTS_FOR_FLAG", 0):
+            assert _should_flag(FLAG_THRESHOLD + 1.0, event_count=1) is True
 
     def test_score_below_threshold(self) -> None:
         assert _should_flag(FLAG_THRESHOLD - 1.0, event_count=100) is False

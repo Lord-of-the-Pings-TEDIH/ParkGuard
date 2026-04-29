@@ -1,4 +1,5 @@
 import type {
+  Alert,
   Camera,
   Detection,
   MobileLprPose,
@@ -391,6 +392,19 @@ export async function dismissSuspiciousOccupancy(recordId: number): Promise<void
   await fetchApi<void>(`${API_BASE}/parking/spots/suspicious/${recordId}`, {
     method: "DELETE",
   });
+}
+
+export async function getAlerts(resolved?: boolean): Promise<Alert[]> {
+  const params = resolved !== undefined ? `?resolved=${resolved}` : "";
+  return fetchApi<Alert[]>(`${API_BASE}/alerts${params}`);
+}
+
+export async function resolveAlert(alertId: number): Promise<Alert> {
+  return fetchApi<Alert>(`${API_BASE}/alerts/${alertId}/resolve`, { method: "POST" });
+}
+
+export async function deleteAlert(alertId: number): Promise<void> {
+  await fetchApi<void>(`${API_BASE}/alerts/${alertId}`, { method: "DELETE" });
 }
 
 export async function searchPlates(
